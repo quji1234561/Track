@@ -1,0 +1,40 @@
+[workspace]
+name = "track"
+version = "0.1.0"
+description = "传统图像处理目标跟踪系统 — NCC + 多模板 + 卡尔曼滤波"
+authors = ["Track Project"]
+channels = ["conda-forge"]
+platforms = ["win-64", "osx-arm64", "osx-64", "linux-64"]
+
+[tasks]
+# 运行全部场景
+run-all = "python -m src.main --scene all"
+
+# 运行单个场景
+scene1 = "python -m src.main --scene scene1_animation"
+scene2 = "python -m src.main --scene scene2_car"
+scene3 = "python -m src.main --scene scene3_bicycle"
+scene4 = "python -m src.main --scene scene4_drone"
+
+# 调试模式（前100帧）
+debug1 = "python -m src.main --scene scene1_animation --max-frames 100 --debug"
+debug2 = "python -m src.main --scene scene2_car --max-frames 100 --debug"
+debug3 = "python -m src.main --scene scene3_bicycle --max-frames 100 --debug"
+debug4 = "python -m src.main --scene scene4_drone --max-frames 100 --debug"
+
+# 保存关键帧
+all-with-frames = "python -m src.main --scene all --save-frames"
+
+# 人工标注工具
+annotate = "python -m src.annotation_tool"
+
+# 验证代码合规性
+check-compliance = "grep -R 'matchTemplate\\|Tracker\\|dnn\\|YOLO\\|torch\\|tensorflow\\|keras\\|sklearn' src/ || echo 'No forbidden APIs found'"
+
+[dependencies]
+python = ">=3.10"
+numpy = ">=1.24"
+opencv = ">=4.8"
+pandas = ">=2.0"
+matplotlib = ">=3.7"
+python-docx = ">=0.8"
