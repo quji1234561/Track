@@ -8,14 +8,21 @@ import cv2
 import numpy as np
 
 
-def draw_tracking_result(frame, result, trajectory, scene_name):
+def draw_tracking_result(frame, result, trajectory, scene_name,
+                         show_predicted_bbox=True,
+                         draw_predicted_trajectory=True):
     """Draw tracking result overlay on a video frame.
 
     Args:
-        frame: BGR color frame (will be modified in-place).
+        frame: BGR color frame (modified in-place).
         result: tracking result dict from tracker.track_frame().
-        trajectory: list of (cx, cy) points for trail drawing.
+        trajectory: list of (cx, cy) points already selected for trail drawing.
         scene_name: scene display name for top-left label.
+        show_predicted_bbox: if False, skip drawing yellow predicted box
+                             (Kalman still runs internally).
+        draw_predicted_trajectory: if False, trajectory only uses detected points
+                                   (already handled by caller; this flag is for
+                                   the status label).
 
     Returns:
         The modified frame.
@@ -24,33 +31,49 @@ def draw_tracking_result(frame, result, trajectory, scene_name):
     x, y, w, h = bbox
     score = result["score"]
     detected = result["detected"]
-    predicted = result["predicted"]
+    predicted = result.get("predicted", False)
     frame_id = result["frame_id"]
+    lost_count = result.get("lost_count", 0)
     cx, cy = x + w // 2, y + h // 2
 
-    # Box color: green = detected, yellow = predicted
-    color = (0, 255, 0) if detected else (0, 255, 255)
-    thickness = 2
-    cv2.rectangle(frame, (x, y), (x + w, y + h), color, thickness)
+    # --- Bounding box ---
+    if detected:
+        # Green box for accepted NCC detection
+        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        cv2.circle(frame, (cx, cy), 4, (0, 0, 255), -1)
+    elif predicted and show_predicted_bbox:
+        # Yellow box only if configured to show predictions
+        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 255), 2)
+        cv2.circle(frame, (cx, cy), 4, (0, 0, 255), -1)
+    # else: predicted but show_predicted_bbox=False → no box, no center dot
 
-    # Center point
-    cv2.circle(frame, (cx, cy), 4, (0, 0, 255), -1)
-
-    # Trajectory trail
-    pts = trajectory + [(cx, cy)]
-    for i in range(1, len(pts)):
-        p1 = pts[i - 1]
-        p2 = pts[i]
+    # --- Trajectory trail ---
+    # trajectory list is already filtered by the caller based on
+    # draw_predicted_trajectory — we just draw whatever points are provided.
+    for i in range(1, len(trajectory)):
+        p1 = trajectory[i - 1]
+        p2 = trajectory[i]
         cv2.line(frame, p1, p2, (255, 0, 0), 1)
 
-    # Info overlay - top left
+    # --- Info overlay (top-left) ---
+    if detected:
+        status = "DETECT"
+    elif predicted:
+        status = "PREDICT"
+    else:
+        status = "LOST"
+
     label_lines = [
         f"{scene_name}",
-        f"Frame: {frame_id}",
-        f"Score: {score:.3f}",
+        f"Frame: {frame_id}  Lost: {lost_count}",
+        f"Score: {score:.3f}  Status: {status}",
         f"Center: ({cx}, {cy})",
-        f"Status: {'DETECT' if detected else 'PREDICT' if predicted else 'NONE'}",
     ]
+    if predicted and not show_predicted_bbox:
+        label_lines.append("(pred bbox hidden)")
+    if predicted and not draw_predicted_trajectory:
+        label_lines.append("(pred traj hidden)")
+
     y0 = 25
     for i, text in enumerate(label_lines):
         cv2.putText(

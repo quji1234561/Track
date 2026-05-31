@@ -16,7 +16,8 @@ import pandas as pd
 TRAJECTORY_FIELDS = [
     "frame_id", "x", "y", "w", "h",
     "center_x", "center_y", "score",
-    "detected", "predicted", "template_id",
+    "detected", "predicted", "used_for_trajectory",
+    "template_id",
 ]
 
 BASIC_METRIC_FIELDS = [
@@ -45,7 +46,8 @@ def save_trajectory_csv(results, output_path):
                 "center_y": r["center"][1],
                 "score": r["score"],
                 "detected": int(r["detected"]),
-                "predicted": int(r["predicted"]),
+                "predicted": int(r.get("predicted", False)),
+                "used_for_trajectory": int(r.get("used_for_trajectory", False)),
                 "template_id": r["template_id"],
             }
             writer.writerow(row)

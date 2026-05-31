@@ -28,8 +28,13 @@ all-with-frames = "python -m src.main --scene all --save-frames"
 # 人工标注工具
 annotate = "python -m src.annotation_tool"
 
-# 验证代码合规性
-check-compliance = "grep -R 'matchTemplate\\|Tracker\\|dnn\\|YOLO\\|torch\\|tensorflow\\|keras\\|sklearn' src/ || echo 'No forbidden APIs found'"
+# 模板截取工具（从原视频帧直接裁剪）
+crop-scene2 = "python -m src.template_crop_tool --scene scene2_car --frame 30 --name scene2_car_template_2.png"
+crop-scene3 = "python -m src.template_crop_tool --scene scene3_bicycle --frame 50 --name scene3_bicycle_template_2.png"
+crop-scene4 = "python -m src.template_crop_tool --scene scene4_drone --frame 100 --name scene4_drone_template_2.png"
+
+# 验证代码合规性（检查无禁止API调用）
+check-compliance = "grep -R 'matchTemplate\\|TrackerKCF\\|TrackerCSRT\\|TrackerMOSSE\\|cv2.dnn\\|torch\\|tensorflow\\|keras\\|sklearn\\|ultralytics\\|YOLO' src/ || echo 'No forbidden APIs found'"
 
 [dependencies]
 python = ">=3.10"

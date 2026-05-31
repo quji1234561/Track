@@ -1,3 +1,8 @@
-document/
 PROJECT_PLAN.md
+.trae/
+.pixi/
 __pycache__/
+debug/
+document/
+outputs/videos/
+outputs/debug/
