@@ -1,7 +1,18 @@
-"""Visualization: draw bounding boxes, center points, trajectories, and info text.
+"""可视化绘制: 检测框、预测框、中心点、轨迹线、信息文字。
 
-OpenCV drawing functions (cv2.rectangle, cv2.circle, cv2.line, cv2.putText)
-are the only OpenCV functions used here — they are permitted per project constraints.
+绘制规则:
+- detected=True: 绿色实线框 + 红色中心点（NCC匹配成功）
+- predicted=True 且 show_predicted_bbox=True: 黄色实线框 + 红色中心点（卡尔曼预测）
+- detected=False 且 predicted=False: 不画框不画点
+- 轨迹线: 蓝色，根据传入的trajectory列表绘制（由调用者控制哪些点加入轨迹）
+
+tracking_stop_frame后的行为:
+- bbox=[0,0,0,0]→w=0,h=0→矩形不可见
+- detected=False,predicted=False→不画框不画点
+- 但trajectory列表非空→历史轨迹线仍正常绘制
+- 左上角显示tracking stopped提示
+
+OpenCV仅用于rectangle/circle/line/putText基础绘图函数。
 """
 
 import cv2

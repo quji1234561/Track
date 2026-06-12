@@ -1,7 +1,19 @@
-"""Image preprocessing: grayscale conversion, normalization, multi-scale templates.
+"""图像预处理: 灰度化、归一化、多尺度模板生成。
 
-OpenCV cv2.cvtColor and cv2.resize are the only OpenCV functions used here.
-No matching or tracking functions are called.
+核心函数:
+- to_gray(): BGR→灰度
+- normalize_gray(): uint8[0,255]→float32[0,1] （除以255而非min-max，保持帧和模板
+  在同一强度参考系下，min-max会独立拉伸导致NCC失效）
+- preprocess_frame(): 灰度化+可选resize+归一化
+- preprocess_template(): 读取模板→灰度→归一化→按multi_scale生成多个缩放版本
+- _imread_unicode(): np.fromfile+cv2.imdecode解决Windows CJK路径问题
+
+模板尺寸:
+- 过大: 包含过多背景，NCC受背景主导，区分度下降
+- 过小: 目标纹理不足，NCC可靠度下降
+- 建议: 目标本体 + 少量周围背景（~20% padding）
+
+OpenCV仅用于cvtColor和resize，不涉及任何匹配算法。
 """
 
 import cv2

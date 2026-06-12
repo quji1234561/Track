@@ -1,14 +1,22 @@
-"""Main entry point for the traditional image processing target tracking system.
+"""Track 项目主入口 —— 传统图像处理目标跟踪系统。
 
-Usage:
+用法:
     python -m src.main --scene scene1_animation
     python -m src.main --scene all
-    python -m src.main --scene scene2_car --max-frames 300 --debug
-    python -m src.main --scene scene4_drone --save-frames
+    python -m src.main --scene scene4_drone --max-frames 600 --debug
 
-OpenCV is used only for: VideoCapture, VideoWriter, cvtColor, imwrite, and drawing.
-Core NCC matching: self-implemented in src/ncc.py.
-Tracking: multi-template local search + Kalman filter in src/tracker.py.
+主循环流程:
+1. 读取config获取场景参数
+2. 打开视频，创建Tracker
+3. 第一帧: tracker.initialize() 全图NCC搜索 → 初始化确认 → 设置初态
+4. 逐帧循环:
+   - 若frame_id > tracking_stop_frame: 跳过NCC，仅绘制历史轨迹
+   - 否则: preprocess_frame → tracker.track_frame() → 约束检查 →
+     accept/predict → 写结果
+5. 运行结束: 保存debug CSV、轨迹CSV、指标CSV、跟踪视频
+
+OpenCV仅用于: VideoCapture, VideoWriter, cvtColor, imwrite, 绘图函数。
+NCC匹配完全由src/ncc.py自写，跟踪逻辑由src/tracker.py自主实现。
 """
 
 import argparse
@@ -44,6 +52,18 @@ DEBUG_CSV_FIELDS = [
     "distance_to_prediction",
     "accept_result", "reject_reason", "lost_count",
     "used_for_trajectory", "show_predicted_bbox", "draw_predicted_trajectory",
+    # Top-K
+    "topk_enabled", "topk_candidates_count",
+    "best_raw_score", "best_raw_center_x", "best_raw_center_y",
+    "accepted_candidate_rank", "accepted_candidate_score",
+    "accepted_candidate_center_x", "accepted_candidate_center_y",
+    "accepted_candidate_reject_history",
+    "y_delta_from_prev", "y_delta_from_prediction",
+    "max_y_decrease_per_frame", "max_candidate_ahead_of_prediction_y",
+    "y_forward_speed_valid",
+    # last_accepted
+    "last_accepted_center_x", "last_accepted_center_y",
+    "last_accepted_frame_id",
 ]
 
 # Per-scale score CSV fields — one row per candidate template per frame
@@ -123,13 +143,18 @@ def run_scene(scene_key, args):
     tracker = TraditionalTracker(cfg)
 
     start_frame = cfg.get("start_frame", 0)
+    tracking_stop_frame = cfg.get("tracking_stop_frame", None)
+    if tracking_stop_frame is not None:
+        print(f"Tracking will stop after frame {tracking_stop_frame} "
+              f"(no NCC, no boxes, no new trajectory)")
+
     if start_frame > 0:
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         print(f"Skipping to frame {start_frame}...")
 
     results = []
     debug_rows = []
-    scale_score_rows = []  # per-candidate scores (one row per template per frame)
+    scale_score_rows = []
     trajectory = []
 
     # --- Read first frame ---
@@ -193,6 +218,32 @@ def run_scene(scene_key, args):
             break
 
         frame_id = start_frame + i
+
+        # --- Stop tracking after tracking_stop_frame ---
+        if tracking_stop_frame is not None and frame_id > tracking_stop_frame:
+            result = {
+                "frame_id": frame_id,
+                "bbox": [0, 0, 0, 0],
+                "center": (0, 0),
+                "score": -1.0,
+                "detected": False,
+                "predicted": False,
+                "template_id": -1,
+                "reject_reason": "tracking_stopped_after_target_obscured",
+            }
+            # Draw historical trajectory but NO box/center, then write
+            vis_frame = frame.copy()
+            draw_tracking_result(vis_frame, result, trajectory, scene_name,
+                                 show_predicted_bbox=False,
+                                 draw_predicted_trajectory=False)
+            out_writer.write(vis_frame)
+            results.append(result)
+            debug_rows.append(_debug_row(result, frame_id))
+            if total_frames > 20 and i % max(1, total_frames // 10) == 0:
+                pct = 100.0 * i / total_frames
+                print(f"  Progress: {pct:.0f}% (stopped)")
+            continue
+
         gray = preprocess_frame(frame)
         result = tracker.track_frame(gray, frame_id)
 

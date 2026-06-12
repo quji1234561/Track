@@ -1,9 +1,20 @@
-"""Metrics computation and CSV output for tracking results.
+"""指标统计与CSV输出。
 
-Computes basic metrics (detection rate, prediction rate, average NCC score, FPS)
-and saves trajectory/performance CSV files. Pixel-error metrics require ground truth.
+输出文件:
+- trajectory.csv: 每帧一行，含bbox位置、中心点、NCC分数、检测/预测状态、
+  used_for_trajectory标志、template_id
+- metrics.csv: 单场景总体指标（总帧数、检测帧数、预测帧数、检测率、
+  平均NCC分数、处理速度FPS）
+- summary_metrics.csv: 四个场景的指标汇总对比
 
-No OpenCV functions used here — only standard library, NumPy, and pandas.
+基础指标计算(无需真值): detection_rate = detected_frames / total_frames
+                         average_score = mean of non-zero NCC scores
+                         average_fps = total_frames / elapsed_time
+
+像素误差计算(需真值): compute_metrics_with_ground_truth()接收人工标注CSV后
+                     计算mean/max pixel error, miss_rate, false_rate
+
+不依赖OpenCV，仅使用标准库+pandas。
 """
 
 import csv

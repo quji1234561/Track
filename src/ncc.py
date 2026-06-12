@@ -1,11 +1,20 @@
-"""Self-implemented Normalized Cross-Correlation (NCC) matching.
+"""自写归一化互相关(NCC)模板匹配 —— 纯NumPy实现。
 
-Two search modes:
-- ncc_search: vectorized stride-trick NCC (faster for small search areas)
-- ncc_search_integral: integral-image accelerated NCC (faster for large/full-frame)
+NCC公式: score = Σ((I-μI)×(T-μT)) / (σI×σT)
+减均值消除亮度差异，除标准差消除对比度差异，分数范围[-1,1]。
 
-Integral images are built with np.cumsum — NO cv2.matchTemplate or OpenCV integral.
-No deep learning, no OpenCV tracking, no third-party matching.
+三种搜索模式：
+- ncc_score(): 单窗口NCC计算
+- ncc_search(): stride-trick矢量化（适合小范围搜索）
+- ncc_search_integral(): 积分图加速（适合大范围/全图搜索）
+
+积分图用np.cumsum自建（非cv2.integral），保持float64精度防止高均值低方差
+区域的灾难性数值抵消。
+
+multi_template_search()遍历所有模板/尺度候选，取最高分。支持collect_all_scores
+（返回每个候选的分数）和return_topk（返回空间Top-K候选列表供后续约束筛选）。
+
+完全避免cv2.matchTemplate —— 积分图、滑窗、NCC计算全部自写。
 """
 
 import numpy as np
@@ -180,22 +189,27 @@ def ncc_search(search_img, template, step=2, verbose=False):
 #  Integral-image NCC (fast for full-frame / large search areas)
 # ---------------------------------------------------------------------------
 
-def ncc_search_integral(search_img, template, step=2, verbose=False):
-    """Integral-image accelerated NCC search with vectorized batch processing.
+def ncc_search_integral(search_img, template, step=2, verbose=False, topk=None):
+    """Integral-image accelerated NCC search.
 
-    For each y row, all x positions are evaluated in a single vectorized pass:
-    - rect_sum computed via numpy array indexing (fast, no Python loop)
-    - numerator computed via strided windows on that row only
+    Args:
+        search_img: 2D float32 grayscale image.
+        template: 2D float32 template.
+        step: pixel step for sliding window.
+        verbose: print progress.
+        topk: if int, return top-K candidates [(score,x,y),...] sorted descending.
+              if None, return (best_x, best_y, best_score).
 
-    This avoids both the double Python loop and the huge memory allocations
-    of full-frame stride-trick — it only allocates one row of windows at a time.
-
-    Returns (best_x, best_y, best_score).
+    Returns:
+        If topk is None: (best_x, best_y, best_score).
+        If topk is int: list of (score, x, y) tuples, length <= topk.
     """
     img_h, img_w = search_img.shape
     tmpl_h, tmpl_w = template.shape
 
     if tmpl_h > img_h or tmpl_w > img_w:
+        if topk is not None:
+            return []
         return -1, -1, -1.0
 
     t_mean = template.mean()
@@ -203,52 +217,45 @@ def ncc_search_integral(search_img, template, step=2, verbose=False):
     template_norm = np.sqrt(np.sum(template_zero ** 2))
 
     if template_norm < 1e-10:
+        if topk is not None:
+            return []
         return -1, -1, -1.0
 
     N = float(tmpl_w * tmpl_h)
-
-    # Build integral images once
     integral, integral_sq = compute_integral_images_numpy(search_img)
-
-    # Pre-compute all x positions
     x_positions = np.arange(0, img_w - tmpl_w + 1, step, dtype=np.int32)
     n_x = len(x_positions)
 
+    want_topk = topk is not None and topk > 0
     best_score = -1.0
     best_x, best_y = 0, 0
+    topk_heap = []  # list of (score, x, y) for top-K
 
     y_range = range(0, img_h - tmpl_h + 1, step)
     n_y = len(y_range)
     report_every = max(1, n_y // 10)
-
-    BATCH_X = 32  # Process N x-positions at a time to limit memory
+    BATCH_X = 32
 
     for i, y in enumerate(y_range):
-        # Vectorized integral sums for all x at this y (keep float64 for precision)
         xp = x_positions
         sum_I = (
             integral[y + tmpl_h, xp + tmpl_w]
             - integral[y, xp + tmpl_w]
             - integral[y + tmpl_h, xp]
             + integral[y, xp]
-        )  # float64
-
+        )
         sum_I2 = (
             integral_sq[y + tmpl_h, xp + tmpl_w]
             - integral_sq[y, xp + tmpl_w]
             - integral_sq[y + tmpl_h, xp]
             + integral_sq[y, xp]
-        )  # float64
-
-        # Variance in float64 to avoid catastrophic cancellation
+        )
         var_sum = np.maximum(sum_I2 - (sum_I * sum_I) / N, 0.0)
-        # Require meaningful patch variance: flat regions give undefined NCC
         valid = var_sum > 1e-6
 
         if not valid.any():
             continue
 
-        # Numerator: compute in small batches to limit memory
         numerator = np.empty(n_x, dtype=np.float32)
         for b_start in range(0, n_x, BATCH_X):
             b_end = min(b_start + BATCH_X, n_x)
@@ -261,20 +268,36 @@ def ncc_search_integral(search_img, template, step=2, verbose=False):
                 batch_patches * template_zero, axis=(1, 2)
             )
 
-        # Stable score computation
         patch_std = np.sqrt(np.maximum(var_sum, 0.0))
         denom = np.where(valid, patch_std * template_norm, 1.0)
         scores = np.where(valid, numerator / denom, -1.0)
 
+        # Single best
         best_local = np.argmax(scores)
         if scores[best_local] > best_score:
             best_score = scores[best_local]
             best_x, best_y = x_positions[best_local], y
 
+        # Top-K collection
+        if want_topk:
+            k = min(topk, len(scores))
+            row_top_indices = np.argpartition(scores, -k)[-k:]
+            for idx in row_top_indices:
+                s = float(scores[idx])
+                if s > -0.5:
+                    topk_heap.append((s, int(x_positions[idx]), y))
+            # Keep only top-K globally
+            if len(topk_heap) > topk * 2:
+                topk_heap.sort(key=lambda t: t[0], reverse=True)
+                topk_heap = topk_heap[:topk]
+
         if verbose and i % report_every == 0:
             pct = 100.0 * i / n_y
             print(f"  NCC integral search progress: {pct:.0f}%")
 
+    if want_topk:
+        topk_heap.sort(key=lambda t: t[0], reverse=True)
+        return topk_heap[:topk]
     return best_x, best_y, float(best_score)
 
 
@@ -283,26 +306,30 @@ def ncc_search_integral(search_img, template, step=2, verbose=False):
 # ---------------------------------------------------------------------------
 
 def multi_template_search(search_img, templates, step=2, use_integral=True,
-                          verbose=False, collect_all_scores=False):
+                          verbose=False, collect_all_scores=False,
+                          return_topk=False, topk=8):
     """Search multiple templates and return the best overall match.
 
     Args:
         search_img: 2D float32 grayscale image.
         templates: list of (template_array, scale, template_id) tuples.
         step: sliding window step.
-        use_integral: if True, use ncc_search_integral (faster for large areas);
-                      if False, use ncc_search (stride-trick, faster for small areas).
+        use_integral: if True, use ncc_search_integral.
         verbose: if True, print progress per template.
         collect_all_scores: if True, also return per-candidate scores list.
+        return_topk: if True, return spatial top-K candidate list.
+        topk: number of top-K candidates (default 8).
 
     Returns:
-        dict {x, y, w, h, score, scale, template_id} or None.
-        If collect_all_scores, also returns list of per-candidate dicts.
+        - (best_result, all_scores) if collect_all_scores=True (no topk)
+        - (best_result, all_scores, topk_candidates) if also return_topk=True
+        - best_result if neither flag set
     """
     search_func = ncc_search_integral if use_integral else ncc_search
     best_overall_score = -1.0
     best_result = None
     all_scores = [] if collect_all_scores else None
+    topk_candidates = [] if return_topk else None
 
     for _, (tmpl_img, scale, tmpl_id) in enumerate(templates):
         if verbose:
@@ -310,7 +337,22 @@ def multi_template_search(search_img, templates, step=2, use_integral=True,
             print(f"  [{method}] template {tmpl_id} scale {scale:.2f} "
                   f"({tmpl_img.shape[1]}x{tmpl_img.shape[0]})...")
 
-        x, y, score = search_func(search_img, tmpl_img, step=step)
+        if return_topk and use_integral:
+            tk_list = search_func(search_img, tmpl_img, step=step, topk=topk)
+            if tk_list:
+                best_s, best_x_i, best_y_i = tk_list[0]
+            else:
+                best_s, best_x_i, best_y_i = -1.0, -1, -1
+            # Add all top-K from this template/scale
+            for s, px, py in tk_list:
+                topk_candidates.append({
+                    "x": int(px), "y": int(py),
+                    "w": tmpl_img.shape[1], "h": tmpl_img.shape[0],
+                    "score": float(s), "scale": float(scale),
+                    "template_id": int(tmpl_id),
+                })
+        else:
+            best_x_i, best_y_i, best_s = search_func(search_img, tmpl_img, step=step)
 
         if collect_all_scores:
             all_scores.append({
@@ -320,25 +362,21 @@ def multi_template_search(search_img, templates, step=2, use_integral=True,
                 "angle": 0,
                 "template_w": tmpl_img.shape[1],
                 "template_h": tmpl_img.shape[0],
-                "score": float(score),
-                "match_x": int(x),
-                "match_y": int(y),
+                "score": float(best_s),
+                "match_x": int(best_x_i),
+                "match_y": int(best_y_i),
                 "accepted_as_best": False,
             })
 
-        if score > best_overall_score:
-            best_overall_score = score
+        if best_s > best_overall_score:
+            best_overall_score = best_s
             best_result = {
-                "x": int(x),
-                "y": int(y),
-                "w": tmpl_img.shape[1],
-                "h": tmpl_img.shape[0],
-                "score": float(score),
-                "scale": float(scale),
+                "x": int(best_x_i), "y": int(best_y_i),
+                "w": tmpl_img.shape[1], "h": tmpl_img.shape[0],
+                "score": float(best_s), "scale": float(scale),
                 "template_id": int(tmpl_id),
             }
 
-    # Mark the winner
     if best_result is not None and all_scores is not None:
         for c in all_scores:
             if (c["template_id"] == best_result["template_id"]
@@ -346,6 +384,14 @@ def multi_template_search(search_img, templates, step=2, use_integral=True,
                 c["accepted_as_best"] = True
                 break
 
+    # Sort topk_candidates by score descending
+    if topk_candidates:
+        topk_candidates.sort(key=lambda c: c["score"], reverse=True)
+
+    if return_topk:
+        if collect_all_scores:
+            return best_result, all_scores, topk_candidates
+        return best_result, topk_candidates
     if collect_all_scores:
         return best_result, all_scores
     return best_result

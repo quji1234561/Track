@@ -1,11 +1,19 @@
-"""2D Kalman filter for motion prediction.
+"""自写二维卡尔曼滤波器 —— 纯NumPy矩阵运算实现。
 
-State vector: X = [x, y, vx, vy]^T
-State transition: constant velocity model.
-Observation: Z = [x, y]^T
+状态向量 X = [x, y, vx, vy]^T  (位置+速度)
+观测向量 Z = [x, y]^T            (仅观测位置)
 
-This is a self-implemented Kalman filter using NumPy only.
-No OpenCV Kalman or other tracking filters are used.
+恒速模型: 假设目标在两帧之间匀速直线运动。
+  x(t+1) = x(t) + vx*dt
+  y(t+1) = y(t) + vy*dt
+
+predict(): 用状态转移矩阵A预测下一时刻位置 → (pred_x, pred_y)
+update(): 用观测值Z通过卡尔曼增益K修正状态估计 → (filtered_x, filtered_y)
+
+为什么需要卡尔曼: 当NCC短暂失败时，卡尔曼可用速度估计继续预测目标位置，
+保持轨迹连续。速度从观测序列中自动学习。
+
+本实现完全不使用cv2.KalmanFilter，所有矩阵运算由NumPy完成。
 """
 
 import numpy as np
