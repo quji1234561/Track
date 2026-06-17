@@ -871,6 +871,60 @@ class TraditionalTracker:
         scaled_frame, pre_scale = self._pre_scale_frame(gray_frame)
         s_img_h, s_img_w = scaled_frame.shape
 
+        # --- Scene3 exit detection ---
+        if self.cfg.get("scene3_stop_after_exit", False) and self.center is not None:
+            exit_y = self.cfg.get("scene3_exit_y", 500)
+            exit_lost = self.cfg.get("scene3_exit_lost_frames", 5)
+            if self.center[1] >= exit_y and self.lost_count >= exit_lost:
+                dbg["reject_reason"] = "scene3_target_exited"
+                dbg["detected"] = False
+                dbg["predicted"] = False
+                dbg["lost"] = True
+                dbg["lost_count"] = self.lost_count
+                dbg["center_x"] = int(self.center[0])
+                dbg["center_y"] = int(self.center[1])
+                out = {"frame_id": frame_id, "bbox": self.bbox.copy(),
+                       "center": self.center, "score": self.prev_score,
+                       "detected": False, "predicted": False,
+                       "template_id": _SENTINEL}
+                out.update(dbg)
+                return out
+
+        # --- Scene4 visibility gate ---
+        if self.scene4_visibility_gate and not self.scene4_occluded:
+            patience = self.cfg.get("scene4_low_score_patience", 5)
+            min_vis = self.cfg.get("scene4_min_score_for_visible", 0.32)
+            min_contrast = self.cfg.get("scene4_min_local_contrast", 8.0)
+            # Check if we've been in low-score state
+            if self.lost_count >= patience and self.prev_score < min_vis:
+                self.scene4_occluded = True
+                print(f"  Frame {frame_id}: Scene4 visibility gate — OCCLUDED")
+            elif self.lost_count >= patience:
+                # Check local contrast at last accepted position
+                if (self.last_accepted_center is not None
+                        and self.last_accepted_bbox is not None):
+                    bx, by = self.last_accepted_bbox[0], self.last_accepted_bbox[1]
+                    bw, bh = self.last_accepted_bbox[2], self.last_accepted_bbox[3]
+                    roi = gray_frame[by:by+bh, bx:bx+bw] if bx+bw <= gray_frame.shape[1] and by+bh <= gray_frame.shape[0] else gray_frame
+                    if roi.size > 0 and roi.std() * 255 < min_contrast:
+                        self.scene4_occluded = True
+                        print(f"  Frame {frame_id}: Scene4 visibility gate — low contrast OCCLUDED")
+        if self.scene4_occluded:
+            dbg["reject_reason"] = "scene4_occluded_visibility_gate"
+            dbg["detected"] = False
+            dbg["predicted"] = False
+            dbg["lost"] = True
+            dbg["lost_count"] = self.lost_count
+            dbg["center_x"] = int(self.center[0]) if self.center else 0
+            dbg["center_y"] = int(self.center[1]) if self.center else 0
+            out = {"frame_id": frame_id,
+                   "bbox": self.bbox.copy() if self.bbox else [0,0,0,0],
+                   "center": self.center if self.center else (0,0),
+                   "score": self.prev_score, "detected": False,
+                   "predicted": False, "template_id": _SENTINEL}
+            out.update(dbg)
+            return out
+
         # Kalman predict (original coords)
         pred_x, pred_y = self.kalman.predict()
         dbg["predicted_x"] = int(pred_x)
@@ -912,25 +966,87 @@ class TraditionalTracker:
             if pre_scale < 1.0 else self.templates
         )
 
-        # --- Top-K candidate selection ---
-        use_topk = self.cfg.get("enable_topk_candidate_selection", False)
-        topk_count = self.cfg.get("topk_candidates", 8)
-        topk_enabled = use_topk and topk_count > 0
+        # --- Scene3 gradient NCC: dual-channel matching ---
+        if self.scene3_use_gradient and self.gradient_templates:
+            from .preprocess import compute_gradient
+            grad_scaled = compute_gradient(scaled_frame)
+            grad_search = grad_scaled[y1:y2, x1:x2]
+            if search_window.shape[0] < s_bbox_h or search_window.shape[1] < s_bbox_w:
+                grad_search = grad_scaled
+            grad_working = (
+                self._scale_templates(self.gradient_templates, pre_scale)
+                if pre_scale < 1.0 else self.gradient_templates
+            )
+            gray_w = self.cfg.get("scene3_gray_weight", 0.7)
+            grad_w = self.cfg.get("scene3_grad_weight", 0.3)
+
+            gray_result, gray_scores = multi_template_search(
+                search_window, working_templates, step=local_step,
+                use_integral=self.use_integral, collect_all_scores=True,
+            )
+            grad_result, grad_scores = multi_template_search(
+                grad_search, grad_working, step=local_step,
+                use_integral=self.use_integral, collect_all_scores=True,
+            )
+
+            # Fuse per-candidate scores: same template_id+scale → weighted sum
+            fused_scores = []
+            for gs in (gray_scores or []):
+                gs_score = gs["score"] if gs["score"] > _SENTINEL else 0.0
+                gs_match = None
+                for es in (grad_scores or []):
+                    if (es["template_id"] == gs["template_id"]
+                            and abs(es["scale"] - gs["scale"]) < 0.01
+                            and es["match_x"] == gs["match_x"]
+                            and es["match_y"] == gs["match_y"]):
+                        gs_match = es
+                        break
+                edge_s = gs_match["score"] if gs_match and gs_match["score"] > _SENTINEL else 0.0
+                fused = gray_w * gs_score + grad_w * edge_s
+                gs["edge_score"] = edge_s if gs_match else None
+                gs["fused_score"] = fused
+                fused_scores.append(gs)
+
+            all_scores = fused_scores
+            self._last_all_scores = all_scores if all_scores else []
+            # Use fused best for single-result fallback
+            if fused_scores:
+                best_fused = max(fused_scores, key=lambda x: x.get("fused_score", -1.0))
+                result = best_fused
+                dbg["gray_score"] = gray_result["score"] if gray_result else _SENTINEL
+                dbg["edge_score"] = grad_result["score"] if grad_result else _SENTINEL
+            else:
+                result = None
+            topk_candidates = [result] if result else []
+            self._last_all_scores = all_scores
+        else:
+            pass  # gradient path already set topk_candidates above
+
+        # --- Top-K candidate selection (standard, non-gradient) ---
+        if not self.scene3_use_gradient:
+            use_topk = self.cfg.get("enable_topk_candidate_selection", False)
+            topk_count = self.cfg.get("topk_candidates", 8)
+            topk_enabled = use_topk and topk_count > 0
+        else:
+            use_topk = False
+            topk_count = 8
+            topk_enabled = False
         dbg["topk_enabled"] = topk_enabled
 
-        if topk_enabled:
-            result, all_scores, topk_candidates = multi_template_search(
-                search_window, working_templates, step=local_step,
-                use_integral=self.use_integral, collect_all_scores=True,
-                return_topk=True, topk=topk_count,
-            )
-        else:
-            result, all_scores = multi_template_search(
-                search_window, working_templates, step=local_step,
-                use_integral=self.use_integral, collect_all_scores=True,
-            )
-            topk_candidates = [result] if result else []
-        self._last_all_scores = all_scores if all_scores else []
+        if not self.scene3_use_gradient:
+            if topk_enabled:
+                result, all_scores, topk_candidates = multi_template_search(
+                    search_window, working_templates, step=local_step,
+                    use_integral=self.use_integral, collect_all_scores=True,
+                    return_topk=True, topk=topk_count,
+                )
+            else:
+                result, all_scores = multi_template_search(
+                    search_window, working_templates, step=local_step,
+                    use_integral=self.use_integral, collect_all_scores=True,
+                )
+                topk_candidates = [result] if result else []
+            self._last_all_scores = all_scores if all_scores else []
 
         # Compute max_motion
         max_motion_cfg = self.cfg.get("max_motion_distance", 0)
@@ -944,6 +1060,28 @@ class TraditionalTracker:
         dbg["best_raw_score"] = topk_candidates[0]["score"] if topk_candidates else _SENTINEL
         dbg["best_raw_center_x"] = (topk_candidates[0]["x"] + topk_candidates[0]["w"] // 2) if topk_candidates else _SENTINEL
         dbg["best_raw_center_y"] = (topk_candidates[0]["y"] + topk_candidates[0]["h"] // 2) if topk_candidates else _SENTINEL
+
+        # --- Scene2 vehicle prior: re-score candidates ---
+        use_vehicle_prior = self.cfg.get("scene2_use_vehicle_prior", False)
+        if use_vehicle_prior and topk_candidates and self.last_accepted_center:
+            prev_cx, prev_cy = self.last_accepted_center
+            prev_w = self.last_accepted_bbox[2] if self.last_accepted_bbox else 50
+            prev_h = self.last_accepted_bbox[3] if self.last_accepted_bbox else 50
+            scored = []
+            for cand in topk_candidates:
+                if cand is None:
+                    continue
+                cx_sc = (cand["x"] + cand["w"] // 2 + x1) / pre_scale
+                cy_sc = (cand["y"] + cand["h"] // 2 + y1) / pre_scale
+                cw, ch = cand["w"] / pre_scale, cand["h"] / pre_scale
+                fscore, details = self._score_candidate_vehicle_prior(
+                    cx_sc, cy_sc, cw, ch, cand["score"],
+                    pred_x, pred_y, prev_cx, prev_cy, prev_w, prev_h)
+                cand["_vehicle_final"] = fscore
+                cand["_vehicle_details"] = details
+                scored.append((fscore, cand))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            topk_candidates = [c for _, c in scored]
 
         # --- Loop through top-K candidates ---
         accepted_candidate = None
@@ -1023,6 +1161,13 @@ class TraditionalTracker:
             dbg["accepted_candidate_center_x"] = int(up_x)
             dbg["accepted_candidate_center_y"] = int(up_y)
             dbg["accepted_candidate_reject_history"] = ";".join(reject_history) if reject_history else ""
+            # Vehicle prior debug
+            vd = cand.get("_vehicle_details", {})
+            if vd:
+                dbg["candidate_final_score"] = vd.get("final_score", _SENTINEL)
+                dbg["direction_penalty"] = vd.get("dir_penalty", _SENTINEL)
+                dbg["scale_penalty"] = vd.get("scale_penalty", _SENTINEL)
+            dbg["scene_strategy"] = "vehicle_prior" if use_vehicle_prior else ""
 
             out = {
                 "frame_id": frame_id,
