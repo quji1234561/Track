@@ -212,6 +212,15 @@ SCENES = {
         "prediction_max_height_change_ratio": 1.5,    # 预测框高度变化上限
         "prediction_out_of_bounds_policy": "reject",  # 预测出界策略: 拒绝
         "prediction_reject_adds_lost": True,          # 预测被拒也计入连续丢失
+        # --- 车辆运动先验 ---
+        "scene2_use_vehicle_prior": True,             # 启用车辆专用候选加权评分
+        "scene2_candidate_topk": 20,                  # 参与加权评分的Top-K候选数
+        "scene2_max_lateral_shift": 25,               # 最大横向偏移(px)
+        "scene2_direction_penalty_weight": 0.15,      # 方向惩罚权重
+        "scene2_distance_penalty_weight": 0.20,       # 距离惩罚权重
+        "scene2_scale_penalty_weight": 0.10,          # 尺度惩罚权重
+        "scene2_ncc_weight": 0.55,                    # NCC分数权重
+        "scene2_scale_should_decrease": True,         # 目标尺度应逐渐减小
     },
 
     # =========================================================================
@@ -271,6 +280,15 @@ SCENES = {
         "prediction_max_height_change_ratio": 1.35,
         "prediction_out_of_bounds_policy": "reject",
         "prediction_reject_adds_lost": True,
+        # --- 梯度增强NCC ---
+        "scene3_use_gradient_ncc": True,              # 启用Sobel梯度NCC（增强小目标纹理）
+        "scene3_gray_weight": 0.7,                    # 灰度NCC权重
+        "scene3_grad_weight": 0.3,                    # 梯度NCC权重
+        # --- 骑车人退出判断 ---
+        "scene3_exit_y": 500,                         # 目标接近此y值时判定可能离开画面
+        "scene3_stop_after_exit": True,               # 目标离开画面后停止跟踪
+        "scene3_min_visible_score": 0.70,             # 判定目标可见的最低分数
+        "scene3_exit_lost_frames": 5,                 # 连续低分帧数后判定退出
     },
 
     # =========================================================================
@@ -347,6 +365,12 @@ SCENES = {
         "prediction_max_height_change_ratio": 1.3,
         "prediction_out_of_bounds_policy": "reject",
         "prediction_reject_adds_lost": True,
+        # --- 可见性判断 ---
+        "scene4_use_visibility_gate": True,           # 启用可见性判断（不只看固定帧号）
+        "scene4_min_score_for_visible": 0.32,         # 可见最低NCC分数
+        "scene4_low_score_patience": 5,               # 连续低分容忍帧数
+        "scene4_min_local_contrast": 8.0,             # 目标区域最低局部对比度
+        "scene4_stop_when_occluded": True,            # 遮挡时停止画框保留轨迹
     },
 }
 

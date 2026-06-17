@@ -74,6 +74,49 @@ def _imread_unicode(path):
     return img
 
 
+def compute_gradient(gray_img):
+    """Compute Sobel gradient magnitude for edge-enhanced NCC matching.
+
+    Uses cv2.Sobel (traditional image processing) on grayscale image.
+    Returns float32 [0, 1] normalized gradient magnitude.
+    """
+    if gray_img.dtype != np.uint8:
+        gx = cv2.Sobel(gray_img, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(gray_img, cv2.CV_32F, 0, 1, ksize=3)
+    else:
+        gx = cv2.Sobel(gray_img.astype(np.float32), cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(gray_img.astype(np.float32), cv2.CV_32F, 0, 1, ksize=3)
+    mag = np.sqrt(gx ** 2 + gy ** 2)
+    if mag.max() > 1e-10:
+        mag = mag / mag.max()
+    return mag.astype(np.float32)
+
+
+def preprocess_template_gradient(template_path, scales=None):
+    """Read template, generate both grayscale and gradient versions.
+
+    Returns:
+        list of (gray_template, grad_template, scale) tuples for NCC matching.
+    """
+    if scales is None:
+        scales = [1.0]
+    img = _imread_unicode(template_path)
+    gray = to_gray(img)
+    gray_norm = normalize_gray(gray)
+    grad_norm = normalize_gray(compute_gradient(gray))
+    templates = []
+    for s in scales:
+        if s == 1.0:
+            tg = gray_norm
+            te = grad_norm
+        else:
+            h, w = gray_norm.shape
+            tg = cv2.resize(gray_norm, (int(w * s), int(h * s)))
+            te = cv2.resize(grad_norm, (int(w * s), int(h * s)))
+        templates.append((tg.astype(np.float32), te.astype(np.float32), s))
+    return templates
+
+
 def preprocess_template(template_path, scales=None):
     """Read template image, convert to grayscale, generate multi-scale versions.
 

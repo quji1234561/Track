@@ -116,6 +116,12 @@ class TraditionalTracker:
         self.ncc_step = self.cfg.get("ncc_step", 2)
         self.resize_scale = self.cfg.get("resize_scale", 1.0)
 
+        # --- Scene-specific strategy flags ---
+        self.scene3_use_gradient = self.cfg.get("scene3_use_gradient_ncc", False)
+        self.gradient_templates = []  # (gray, grad, scale, tid) tuples for scene3
+        self.scene4_visibility_gate = self.cfg.get("scene4_use_visibility_gate", False)
+        self.scene4_occluded = False  # visibility state for scene4
+
         # --- Last accepted detection state (never polluted by predictions) ---
         self.last_accepted_bbox = None
         self.last_accepted_center = None
@@ -166,9 +172,17 @@ class TraditionalTracker:
         template_paths = self.cfg["templates"]
         scales = self.cfg.get("multi_scale", [1.0])
         for tid, tpath in enumerate(template_paths):
-            tmpls = preprocess_template(tpath, scales=scales)
-            for tmpl_img, sc in tmpls:
-                self.templates.append((tmpl_img, sc, tid))
+            # Gradient NCC (scene3): generate (gray, grad, scale) tuples
+            if self.scene3_use_gradient:
+                from .preprocess import preprocess_template_gradient
+                tmpls = preprocess_template_gradient(tpath, scales=scales)
+                for gray_t, grad_t, sc in tmpls:
+                    self.templates.append((gray_t, sc, tid))
+                    self.gradient_templates.append((grad_t, sc, tid))
+            else:
+                tmpls = preprocess_template(tpath, scales=scales)
+                for tmpl_img, sc in tmpls:
+                    self.templates.append((tmpl_img, sc, tid))
 
     def _print_template_summary(self):
         src_count = len(self.cfg["templates"])
@@ -225,6 +239,56 @@ class TraditionalTracker:
     # ------------------------------------------------------------------
     #  Stability strategies
     # ------------------------------------------------------------------
+
+    def _score_candidate_vehicle_prior(self, cand_cx, cand_cy, cand_w, cand_h,
+                                        cand_score, pred_x, pred_y,
+                                        prev_cx, prev_cy, prev_w, prev_h):
+        """Scene2 vehicle prior: compute weighted final_score for a candidate.
+
+        final = ncc_w * norm_ncc - dist_w * norm_dist - dir_w * dir_penalty - scale_w * scale_penalty
+        """
+        ncc_w = self.cfg.get("scene2_ncc_weight", 0.55)
+        dist_w = self.cfg.get("scene2_distance_penalty_weight", 0.20)
+        dir_w = self.cfg.get("scene2_direction_penalty_weight", 0.15)
+        scale_w = self.cfg.get("scene2_scale_penalty_weight", 0.10)
+
+        # Normalized NCC (already in [-1,1])
+        norm_ncc = max(0.0, cand_score)
+
+        # Distance penalty: distance from Kalman prediction
+        max_dist = max(1.0, self.cfg.get("max_motion_distance", 50))
+        dist = math.hypot(cand_cx - pred_x, cand_cy - pred_y)
+        norm_dist = min(1.0, dist / max_dist)
+
+        # Direction penalty
+        dir_y = self.cfg.get("motion_direction_y", 0)
+        tolerance = self.cfg.get("motion_direction_tolerance", 10)
+        dy = cand_cy - prev_cy
+        dir_penalty = 0.0
+        if dir_y == -1 and dy > tolerance:
+            dir_penalty = min(1.0, (dy - tolerance) / 30.0)
+        elif dir_y == 1 and dy < -tolerance:
+            dir_penalty = min(1.0, (-dy - tolerance) / 30.0)
+
+        # Scale penalty: how much scale changed
+        max_lat = self.cfg.get("scene2_max_lateral_shift", 25)
+        dx = abs(cand_cx - prev_cx)
+        lat_penalty = min(1.0, dx / max_lat) if dx > max_lat else 0.0
+
+        scale_penalty = 0.0
+        if prev_w > 0 and prev_h > 0 and cand_w > 0 and cand_h > 0:
+            prev_area = prev_w * prev_h
+            cand_area = cand_w * cand_h
+            ratio = max(cand_area / prev_area, prev_area / cand_area)
+            scale_penalty = min(1.0, (ratio - 1.0) / 1.0)  # >2x change = max penalty
+
+        final = (ncc_w * norm_ncc - dist_w * norm_dist
+                 - dir_w * dir_penalty - scale_w * (scale_penalty + lat_penalty * 0.5))
+        return final, {
+            "ncc_w": ncc_w, "norm_ncc": norm_ncc, "norm_dist": norm_dist,
+            "dir_penalty": dir_penalty, "scale_penalty": scale_penalty,
+            "lat_penalty": lat_penalty, "final_score": final,
+        }
 
     def _check_jump(self, new_cx, new_cy, new_w, new_h):
         if not self.cfg.get("enable_jump_detection", False):
