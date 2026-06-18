@@ -211,6 +211,43 @@ class TraditionalTracker:
                 for tmpl_img, sc in tmpls:
                     self.templates.append((tmpl_img, sc, tid))
 
+    @staticmethod
+    def _candidate_bbox_safe(cand):
+        """Safely get (x, y, w, h) from any candidate schema. Returns None if invalid."""
+        if cand is None or not isinstance(cand, dict):
+            return None
+        x = cand.get("x", cand.get("match_x", cand.get("bbox_x", None)))
+        y = cand.get("y", cand.get("match_y", cand.get("bbox_y", None)))
+        w = cand.get("w", cand.get("match_w", cand.get("bbox_w", None)))
+        h = cand.get("h", cand.get("match_h", cand.get("bbox_h", None)))
+        if (x is None or y is None or w is None or h is None) and "bbox" in cand:
+            bb = cand.get("bbox")
+            if isinstance(bb, (list, tuple)) and len(bb) >= 4:
+                x, y, w, h = bb[:4]
+        if x is None or y is None or w is None or h is None:
+            return None
+        try:
+            return int(round(float(x))), int(round(float(y))), int(round(float(w))), int(round(float(h)))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _candidate_center_safe(cand, sentinel=-9999):
+        """Safely get (cx, cy) from any candidate schema."""
+        bbox = TraditionalTracker._candidate_bbox_safe(cand)
+        if bbox is not None:
+            x, y, w, h = bbox
+            return int(x + w // 2), int(y + h // 2)
+        if isinstance(cand, dict):
+            cx = cand.get("center_x", None)
+            cy = cand.get("center_y", None)
+            if cx is not None and cy is not None:
+                try:
+                    return int(round(float(cx))), int(round(float(cy)))
+                except Exception:
+                    pass
+        return sentinel, sentinel
+
     def _print_template_summary(self):
         src_count = len(self.cfg["templates"])
         scales = self.cfg.get("multi_scale", [1.0])
@@ -1209,6 +1246,84 @@ class TraditionalTracker:
         else:
             pass  # gradient path already set topk_candidates above
 
+        # --- Scene3 legacy simple tracking (bypass strict Top-K gate) ---
+        if (self.initialized
+                and self.cfg.get("scene3_use_legacy_simple_tracking", False)):
+            # Simple NCC: take best candidate, check threshold + basic distance
+            best = result if result is not None else (
+                topk_candidates[0] if topk_candidates else None)
+            if best is not None:
+                bb2 = self._candidate_bbox_safe(best)
+                bs = best.get("score", best.get("final_score", _SENTINEL))
+                if bs is None or bs == _SENTINEL:
+                    bs = -1.0
+                if bb2 is not None and bs >= self.cfg["threshold"]:
+                    gx = bb2[0] + x1
+                    gy = bb2[1] + y1
+                    gw, gh = bb2[2], bb2[3]
+                    mc = gx + gw // 2
+                    my = gy + gh // 2
+                    mc_orig, my_orig = mc / pre_scale, my / pre_scale
+                    max_jump = self.cfg.get("scene3_simple_max_jump", 45)
+                    dist_ok = True
+                    if self.last_accepted_center is not None:
+                        if math.hypot(mc_orig - self.last_accepted_center[0],
+                                      my_orig - self.last_accepted_center[1]) > max_jump:
+                            dist_ok = False
+                    if dist_ok:
+                        up_x, up_y = self.kalman.update(mc_orig, my_orig)
+                        ox, oy, ow, oh = self._to_original_coords(gx, gy, gw, gh, pre_scale)
+                        self.bbox = [ox, oy, ow, oh]
+                        self.center = (int(up_x), int(up_y))
+                        self.lost_count = 0
+                        self.prev_score = bs
+                        self._update_last_accepted(self.bbox, self.center, frame_id, dbg)
+                        self.last_reliable_center = self.center
+                        self.last_reliable_bbox = self.bbox.copy()
+                        self.last_reliable_frame = frame_id
+                        dbg["detected"] = True
+                        dbg["accept_result"] = True
+                        dbg["center_x"] = int(up_x)
+                        dbg["center_y"] = int(up_y)
+                        dbg["lost_count"] = 0
+                        dbg["lost"] = False
+                        dbg["best_score"] = bs
+                        dbg["final_score"] = bs
+                        dbg["gray_score"] = bs
+                        dbg["match_x"] = ox
+                        dbg["match_y"] = oy
+                        dbg["match_w"] = ow
+                        dbg["match_h"] = oh
+                        dbg["template_id"] = best.get("template_id", _SENTINEL)
+                        dbg["scale"] = best.get("scale", None)
+                        out = {"frame_id": frame_id, "bbox": self.bbox.copy(),
+                               "center": self.center, "score": bs,
+                               "detected": True, "predicted": False,
+                               "template_id": best.get("template_id", _SENTINEL)}
+                        out.update(dbg)
+                        return out
+                    else:
+                        dbg["reject_reason"] = "scene3_simple_jump_too_large"
+                else:
+                    dbg["reject_reason"] = "scene3_simple_score_below_threshold"
+            else:
+                dbg["reject_reason"] = "ncc_failed"
+            self.lost_count += 1
+            self.stable_detect_count = 0
+            dbg["detected"] = False
+            dbg["predicted"] = True
+            dbg["lost"] = True
+            dbg["lost_count"] = self.lost_count
+            dbg["center_x"] = int(self.center[0]) if self.center else 0
+            dbg["center_y"] = int(self.center[1]) if self.center else 0
+            out = {"frame_id": frame_id,
+                   "bbox": self.bbox.copy() if self.bbox else [0,0,0,0],
+                   "center": self.center if self.center else (0,0),
+                   "score": -1.0, "detected": False, "predicted": True,
+                   "template_id": _SENTINEL}
+            out.update(dbg)
+            return out
+
         # --- Top-K candidate selection (standard, non-gradient) ---
         if not self.scene3_use_gradient:
             use_topk = self.cfg.get("enable_topk_candidate_selection", False)
@@ -1244,9 +1359,17 @@ class TraditionalTracker:
         dbg["max_motion_used"] = max_motion
 
         dbg["topk_candidates_count"] = len(topk_candidates) if topk_candidates else 0
-        dbg["best_raw_score"] = topk_candidates[0]["score"] if topk_candidates else _SENTINEL
-        dbg["best_raw_center_x"] = (topk_candidates[0]["x"] + topk_candidates[0]["w"] // 2) if topk_candidates else _SENTINEL
-        dbg["best_raw_center_y"] = (topk_candidates[0]["y"] + topk_candidates[0]["h"] // 2) if topk_candidates else _SENTINEL
+        if topk_candidates:
+            brx, bry = self._candidate_center_safe(topk_candidates[0], _SENTINEL)
+            dbg["best_raw_center_x"] = brx
+            dbg["best_raw_center_y"] = bry
+            dbg["best_raw_score"] = topk_candidates[0].get(
+                "score", topk_candidates[0].get("final_score", _SENTINEL)
+            ) if isinstance(topk_candidates[0], dict) else _SENTINEL
+        else:
+            dbg["best_raw_center_x"] = _SENTINEL
+            dbg["best_raw_center_y"] = _SENTINEL
+            dbg["best_raw_score"] = _SENTINEL
 
         # --- Scene2 vehicle prior: re-score candidates ---
         use_vehicle_prior = self.cfg.get("scene2_use_vehicle_prior", False)
@@ -1258,9 +1381,12 @@ class TraditionalTracker:
             for cand in topk_candidates:
                 if cand is None:
                     continue
-                cx_sc = (cand["x"] + cand["w"] // 2 + x1) / pre_scale
-                cy_sc = (cand["y"] + cand["h"] // 2 + y1) / pre_scale
-                cw, ch = cand["w"] / pre_scale, cand["h"] / pre_scale
+                bb = self._candidate_bbox_safe(cand)
+                if bb is None:
+                    continue
+                cx_sc = (bb[0] + bb[2] // 2 + x1) / pre_scale
+                cy_sc = (bb[1] + bb[3] // 2 + y1) / pre_scale
+                cw, ch = bb[2] / pre_scale, bb[3] / pre_scale
                 fscore, details = self._score_candidate_vehicle_prior(
                     cx_sc, cy_sc, cw, ch, cand["score"],
                     pred_x, pred_y, prev_cx, prev_cy, prev_w, prev_h)
@@ -1296,10 +1422,14 @@ class TraditionalTracker:
                 reject_history.append(f"rank{rank}:score_below_topk_min")
                 continue
 
-            global_x = cand["x"] + x1
-            global_y = cand["y"] + y1
-            match_cx = global_x + cand["w"] // 2
-            match_cy = global_y + cand["h"] // 2
+            bb = self._candidate_bbox_safe(cand)
+            if bb is None:
+                reject_history.append(f"rank{rank}:candidate_schema_invalid")
+                continue
+            global_x = bb[0] + x1
+            global_y = bb[1] + y1
+            match_cx = global_x + bb[2] // 2
+            match_cy = global_y + bb[3] // 2
             match_cx_orig = match_cx / pre_scale
             match_cy_orig = match_cy / pre_scale
 
@@ -1364,7 +1494,7 @@ class TraditionalTracker:
                     continue
 
             accepted, reason = self._validate_detection_candidate(
-                match_cx, match_cy, cand["w"], cand["h"],
+                match_cx, match_cy, bb[2], bb[3],
                 cand_score, sp_x, sp_y, pre_scale, source="local"
             )
             if accepted:

@@ -1,2 +1,2 @@
 scene,total_frames,detected_frames,predicted_frames,lost_frames,detection_rate,prediction_rate,average_score,average_fps
-大疆无人机航拍视频-骑车人目标跟踪,201,51,6,144,0.2537313432835821,0.029850746268656716,0.9106744483622221,0.3094396191950051
+大疆无人机航拍视频-骑车人目标跟踪,100,52,48,0,0.52,0.48,0.8857575410099827,0.2363884502078402

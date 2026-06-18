@@ -330,6 +330,8 @@ SCENES = {
         "scene3_stop_after_exit": True,               # 目标离开画面后停止跟踪
         "scene3_min_visible_score": 0.70,             # 判定目标可见的最低分数
         "scene3_exit_lost_frames": 5,                 # 连续低分帧数后判定退出
+        "use_scene3_legacy_tracker": True,                # 使用独立Scene3LegacyTracker
+        "scene3_simple_max_jump": 60,                     # 允许最大帧间位移(px)
     },
 
     # =========================================================================

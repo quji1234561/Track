@@ -30,6 +30,10 @@ import cv2
 from .config import SCENES, ensure_output_dirs, get_scene_config, OUTPUT_SUBDIRS
 from .preprocess import preprocess_frame
 from .tracker import TraditionalTracker
+try:
+    from .scene3_legacy_tracker import Scene3LegacyTracker
+except ImportError:
+    Scene3LegacyTracker = None
 from .visualize import draw_tracking_result
 from .metrics import (
     save_trajectory_csv,
@@ -161,7 +165,13 @@ def run_scene(scene_key, args):
         str(out_video_path), fourcc, fps, (frame_w, frame_h)
     )
 
-    tracker = TraditionalTracker(cfg)
+    # Dispatch scene-specific trackers
+    if (scene_key == "scene3_bicycle"
+            and cfg.get("use_scene3_legacy_tracker", False)
+            and Scene3LegacyTracker is not None):
+        tracker = Scene3LegacyTracker(cfg)
+    else:
+        tracker = TraditionalTracker(cfg)
 
     start_frame = cfg.get("start_frame", 0)
     tracking_stop_frame = cfg.get("tracking_stop_frame", None)
