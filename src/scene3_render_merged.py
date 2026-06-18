@@ -125,19 +125,16 @@ def run_render(scene_key, max_frames=0):
             row = merged[fid]
             bb = _row_to_bbox(row)
             center = _row_to_center(row, bb)
-            is_backward = row.get("track_direction", "") == "backward"
 
             if bb and center:
                 x, y, w, h = bb
-                # Color: backward=yellow, forward=green
-                color = (0, 255, 255) if is_backward else (0, 255, 0)
-                cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
+                # Unified green box (same as normal detected) for both backward and forward
+                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
                 cv2.circle(frame, center, 3, (0, 0, 255), -1)
                 trajectory.append(center)
 
-            # Status text
-            status = "BACKWARD" if is_backward else "TRACK"
-            cv2.putText(frame, f"scene3 f{fid} {status}", (10, 25),
+            # Status text (still shows direction in CSV, not on video)
+            cv2.putText(frame, f"scene3 f{fid}", (10, 25),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
         # Draw historical trajectory
