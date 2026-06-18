@@ -154,6 +154,13 @@ class TraditionalTracker:
         self.gmc_residual_history = []         # list of (dx, dy) from last 20 reliable frames
         self.scene2_last_comp_pred = None       # iterative prediction during occlusion
 
+        # --- Scene3 motion detection state ---
+        self.scene3_motion_init_enabled = self.cfg.get("scene3_motion_init_enabled", False)
+        self.prev_gray_for_motion = None
+        self.scene3_state = ""                  # "" / INIT / TRACKING / EXITED
+        self.scene3_motion_tracklet = []         # [(frame_id, cx, cy, w, h, score), ...]
+        self.scene3_motion_init_confirm = 0
+
         # --- Init confirmation state ---
         self._init_pending = False
         self._init_candidate_pos = None
@@ -907,6 +914,98 @@ class TraditionalTracker:
         scaled_frame, pre_scale = self._pre_scale_frame(gray_frame)
         s_img_h, s_img_w = scaled_frame.shape
 
+        # --- Scene3 GMC motion detection (early init) ---
+        if self.scene3_motion_init_enabled and not self.initialized:
+            from .scene3_motion import (_estimate_affine, compensated_frame_diff,
+                                         extract_motion_candidates, score_motion_candidate)
+            if self.prev_gray_for_motion is not None:
+                A, n_inl = _estimate_affine(self.prev_gray_for_motion, scaled_frame,
+                                             self.cfg, exclude_bbox=self.bbox)
+                diff = compensated_frame_diff(self.prev_gray_for_motion, scaled_frame, A, self.cfg)
+                mc = extract_motion_candidates(diff, self.cfg)
+                dbg["motion_candidate_count"] = len(mc)
+                dbg["gmc_valid"] = (A is not None)
+                dbg["gmc_inlier_count"] = n_inl
+
+                # Score candidates
+                prev_ctr = self.center if self.center and self.center[0] > 0 else None
+                best_cand = None
+                best_score = -1.0
+                for cand in mc:
+                    s = score_motion_candidate(cand, scaled_frame, prev_ctr, self.cfg)
+                    fs = (0.45 * cand["motion_score"] + 0.30 * s["shape_score"]
+                          + 0.25 * s["direction_score"])
+                    if fs > best_score:
+                        best_score = fs
+                        best_cand = cand
+                        best_cand["final_score"] = fs
+                        best_cand.update(s)
+
+                # Motion tracklet: try to form consistent sequence
+                if best_cand and best_score >= self.cfg.get("scene3_motion_init_min_score", 0.55):
+                    bc = best_cand
+                    self.scene3_motion_tracklet.append(
+                        (frame_id, bc["cx"], bc["cy"], bc["w"], bc["h"], best_score))
+                    if len(self.scene3_motion_tracklet) > 20:
+                        self.scene3_motion_tracklet.pop(0)
+
+                    min_confirm = self.cfg.get("scene3_motion_init_min_confirm_frames", 5)
+                    max_gap = self.cfg.get("scene3_motion_init_max_gap", 2)
+                    # Check spatial consistency of recent tracklet
+                    recent = self.scene3_motion_tracklet[-min_confirm:]
+                    if len(recent) >= min_confirm:
+                        gaps_ok = all(recent[i][0] - recent[i-1][0] <= max_gap
+                                      for i in range(1, len(recent)))
+                        if gaps_ok:
+                            self.scene3_motion_init_confirm += 1
+                        else:
+                            self.scene3_motion_init_confirm = 0
+                    else:
+                        self.scene3_motion_init_confirm = 0
+
+                    dbg["scene3_init_confirm_count"] = self.scene3_motion_init_confirm
+                    dbg["motion_score"] = bc.get("motion_score", 0)
+                    dbg["shape_score"] = bc.get("shape_score", 0)
+                    dbg["direction_score"] = bc.get("direction_score", 0)
+                    dbg["final_score"] = best_score
+
+                    if self.scene3_motion_init_confirm >= min_confirm:
+                        # Auto-init from motion tracklet
+                        lf = recent[-1]
+                        orig_x = int(lf[1] - lf[3]//2)
+                        orig_y = int(lf[2] - lf[4]//2)
+                        orig_w, orig_h = lf[3], lf[4]
+                        cx, cy = int(lf[1]), int(lf[2])
+                        self.bbox = [orig_x, orig_y, orig_w, orig_h]
+                        self.center = (cx, cy)
+                        self.kalman = KalmanFilter2D(cx, cy)
+                        self.initialized = True
+                        self.lost_count = 0
+                        self.prev_score = best_score
+                        self.scene3_state = "TRACKING"
+                        self.scene3_motion_tracklet = []
+                        self.scene3_motion_init_confirm = 0
+                        dbg["initialized"] = True
+                        dbg["detected"] = True
+                        dbg["accept_result"] = True
+                        dbg["center_x"] = cx
+                        dbg["center_y"] = cy
+                        dbg["scene3_state"] = "TRACKING"
+                        dbg["scene3_strategy"] = "motion_init"
+                        print(f"  Scene3 motion auto-init: center=({cx},{cy}), "
+                              f"score={best_score:.4f}")
+
+                        # Return initialized frame
+                        out = {"frame_id": frame_id, "bbox": self.bbox.copy(),
+                               "center": self.center, "score": best_score,
+                               "detected": True, "predicted": False,
+                               "template_id": _SENTINEL}
+                        out.update(dbg)
+                        self.prev_gray_for_motion = scaled_frame.copy()
+                        return out
+
+            self.prev_gray_for_motion = scaled_frame.copy()
+
         # --- GMC: estimate global affine EVERY frame (not just on accept) ---
         use_gmc_global = (self.cfg.get("scene2_use_global_motion_compensation", False)
                           and _HAS_GMC)
@@ -929,6 +1028,8 @@ class TraditionalTracker:
             exit_y = self.cfg.get("scene3_exit_y", 500)
             exit_lost = self.cfg.get("scene3_exit_lost_frames", 5)
             if self.center[1] >= exit_y and self.lost_count >= exit_lost:
+                self.scene3_state = "EXITED"
+                dbg["scene3_state"] = "EXITED"
                 dbg["reject_reason"] = "scene3_target_exited"
                 dbg["detected"] = False
                 dbg["predicted"] = False
@@ -1096,6 +1197,7 @@ class TraditionalTracker:
             out.update(dbg)
             if _HAS_GMC:
                 self.prev_gray_for_gmc = scaled_frame.copy()
+            self.prev_gray_for_motion = scaled_frame.copy()
             return out
 
         # Kalman predict (original coords)
@@ -1362,6 +1464,34 @@ class TraditionalTracker:
                 if rejected:
                     reject_history.append(f"rank{rank}:{reason}")
                     continue
+
+            # --- Scene3 motion gate ---
+            if self.scene3_state == "TRACKING" and self.cfg.get("scene3_use_motion_gate", False):
+                if self.last_reliable_center is not None:
+                    dx3 = match_cx_orig - self.last_reliable_center[0]
+                    dy3 = match_cy_orig - self.last_reliable_center[1]
+                    dbg["scene3_dx"] = dx3
+                    dbg["scene3_dy"] = dy3
+                    max_bw = self.cfg.get("scene3_max_backward_step", 8)
+                    max_fw = self.cfg.get("scene3_max_forward_step", 16)
+                    max_lat = self.cfg.get("scene3_max_lateral_step", 20)
+                    max_jump = self.cfg.get("scene3_jump_max_distance", 38)
+                    rej = False
+                    if dy3 < -max_bw:
+                        reject_history.append(f"rank{rank}:scene3_backward_jump")
+                        rej = True
+                    elif dy3 > max_fw:
+                        reject_history.append(f"rank{rank}:scene3_forward_jump_too_large")
+                        rej = True
+                    elif abs(dx3) > max_lat:
+                        reject_history.append(f"rank{rank}:scene3_lateral_jump_too_large")
+                        rej = True
+                    elif math.hypot(dx3, dy3) > max_jump:
+                        reject_history.append(f"rank{rank}:scene3_jump_distance_too_large")
+                        rej = True
+                    if rej:
+                        dbg["scene3_motion_gate_enabled"] = True
+                        continue
 
             accepted, reason = self._validate_detection_candidate(
                 match_cx, match_cy, cand["w"], cand["h"],
@@ -1771,9 +1901,10 @@ class TraditionalTracker:
                     dbg["reject_reason"] = f"full_re_search_all_rejected({len(fr_reject_history)})"
                 print(f"  Full re-search REJECTED: all {len(fr_reject_history)} candidates failed")
 
-        # Save for next GMC frame
+        # Save for next GMC/motion frame
         if _HAS_GMC:
             self.prev_gray_for_gmc = scaled_frame.copy()
+        self.prev_gray_for_motion = scaled_frame.copy()
 
         out = {
             "frame_id": frame_id,

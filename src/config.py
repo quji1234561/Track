@@ -330,6 +330,39 @@ SCENES = {
         "scene3_stop_after_exit": True,               # 目标离开画面后停止跟踪
         "scene3_min_visible_score": 0.70,             # 判定目标可见的最低分数
         "scene3_exit_lost_frames": 5,                 # 连续低分帧数后判定退出
+        # --- 运动检测自动初始化 ---
+        "scene3_use_gmc_motion_detection": True,         # 启用GMC+补偿帧差运动检测
+        "scene3_gmc_max_corners": 500,                   # 角点最大数量
+        "scene3_gmc_quality_level": 0.01,                # 角点质量阈值
+        "scene3_gmc_min_distance": 8,                    # 角点最小间距
+        "scene3_gmc_min_valid_tracks": 40,               # 最少有效跟踪点
+        "scene3_gmc_ransac_thresh": 3.0,                 # RANSAC重投影阈值
+        "scene3_gmc_exclude_margin": 60,                 # 排除目标周围区域
+        "scene3_gmc_fallback_identity": True,            # GMC失败回退单位矩阵
+        # 帧差检测
+        "scene3_motion_diff_threshold": 18,              # 帧差二值化阈值
+        "scene3_motion_diff_use_adaptive": True,         # 自适应阈值
+        "scene3_motion_diff_percentile": 97.5,           # 自适应阈值百分位
+        "scene3_motion_morph_open": 1,                   # 开运算迭代
+        "scene3_motion_morph_dilate": 2,                 # 膨胀迭代
+        "scene3_motion_min_area": 4,                     # 最小面积
+        "scene3_motion_max_area": 280,                   # 最大面积
+        "scene3_motion_min_w": 2, "scene3_motion_max_w": 45,
+        "scene3_motion_min_h": 2, "scene3_motion_max_h": 55,
+        "scene3_motion_topk": 20,                        # 保留Top-K运动候选
+        # 自动初始化
+        "scene3_motion_init_enabled": True,              # 启用运动检测自动初始化
+        "scene3_motion_init_start_frame": 0,             # 起始帧
+        "scene3_motion_init_min_confirm_frames": 5,      # 连续确认帧数
+        "scene3_motion_init_max_gap": 2,                 # 最大确认间隔
+        "scene3_motion_init_min_score": 0.55,            # 最低确认分数
+        "scene3_motion_init_min_tracklet_length": 6,     # 最小轨迹长度
+        # 运动门控
+        "scene3_use_motion_gate": True,                  # 启用运动门控
+        "scene3_max_backward_step": 8,                   # 最大后退
+        "scene3_max_forward_step": 16,                   # 最大前向步长
+        "scene3_max_lateral_step": 20,                   # 最大横向
+        "scene3_jump_max_distance": 38,                  # 最大跳变距离
     },
 
     # =========================================================================
