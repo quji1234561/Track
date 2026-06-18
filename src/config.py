@@ -236,6 +236,14 @@ SCENES = {
         "scene2_recovery_max_pred_y_error": 8,            # 候选与预测 y 最大偏差(px)
         "scene2_recovery_max_pred_x_error": 12,           # 候选与预测 x 最大偏差(px)
         "scene2_recovery_max_total_distance": 18,         # 候选与预测最大总距离(px)
+        # 遮挡桥接（栏杆遮挡 → 预测过渡 → 恢复确认）
+        "scene2_occlusion_bridge_enabled": True,          # 启用遮挡状态机
+        "scene2_occlusion_frame_range": [90, 105],        # 已知遮挡帧区间
+        "scene2_max_occlusion_predict_frames": 20,        # 最多预测桥接帧数
+        "scene2_recovery_confirm_frames": 3,              # 恢复需连续确认帧数
+        "scene2_recovery_max_ahead_y": 6,                 # 恢复候选不能超前预测太多(px)
+        "scene2_recovery_min_score": 0.36,                # 恢复阶段降低分数门槛
+        "scene2_draw_prediction_during_occlusion": True,  # 遮挡期间是否显示预测框
     },
 
     # =========================================================================

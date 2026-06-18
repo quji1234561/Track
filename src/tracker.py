@@ -132,6 +132,12 @@ class TraditionalTracker:
         self.last_reliable_center = None    # only updated on confident accept
         self.last_reliable_bbox = None
         self.last_reliable_frame = -1
+        self.reliable_history = []          # [(frame_id, cx, cy, w, h), ...] last ~20
+
+        # --- Scene2 occlusion state machine ---
+        self.scene2_state = "TRACKING"       # TRACKING / OCCLUDED / RECOVERY
+        self.scene2_occlusion_count = 0
+        self.scene2_recovery_confirm_count = 0
 
         # --- Init confirmation state ---
         self._init_pending = False
@@ -940,6 +946,64 @@ class TraditionalTracker:
             out.update(dbg)
             return out
 
+        # --- Scene2 occlusion state machine ---
+        occ_bridge = self.cfg.get("scene2_occlusion_bridge_enabled", False)
+        occ_range = self.cfg.get("scene2_occlusion_frame_range", [])
+        if occ_bridge and occ_range and len(occ_range) == 2:
+            occ_start, occ_end = occ_range
+            max_predict = self.cfg.get("scene2_max_occlusion_predict_frames", 20)
+            if occ_start <= frame_id <= occ_end:
+                self.scene2_state = "OCCLUDED"
+                self.scene2_occlusion_count = frame_id - occ_start + 1
+                if self.scene2_occlusion_count > max_predict:
+                    self.scene2_state = "OCCLUDED"  # stay occluded, max reached
+            elif frame_id > occ_end and self.scene2_state in ("OCCLUDED", "RECOVERY"):
+                if self.scene2_state == "OCCLUDED":
+                    self.scene2_state = "RECOVERY"
+                    self.scene2_recovery_confirm_count = 0
+            elif frame_id < occ_start:
+                self.scene2_state = "TRACKING"
+
+        # --- Handle OCCLUDED state ---
+        if self.scene2_state == "OCCLUDED":
+            # Use Kalman + reliable_history median velocity to predict
+            kf_cx, kf_cy = self.kalman.predict()
+            self.scene2_occlusion_count += 0  # already set above
+            pred_cx, pred_cy = kf_cx, kf_cy
+            # Blend with trajectory velocity if reliable_history has >= 3 points
+            if len(self.reliable_history) >= 3:
+                vxs = [self.reliable_history[i][1] - self.reliable_history[i-1][1]
+                       for i in range(1, len(self.reliable_history))]
+                vys = [self.reliable_history[i][2] - self.reliable_history[i-1][2]
+                       for i in range(1, len(self.reliable_history))]
+                med_vx = sorted(vxs)[len(vxs)//2]
+                med_vy = sorted(vys)[len(vys)//2]
+                lr_cx, lr_cy = self.reliable_history[-1][1], self.reliable_history[-1][2]
+                traj_cx = lr_cx + med_vx * self.scene2_occlusion_count
+                traj_cy = lr_cy + med_vy * self.scene2_occlusion_count
+                pred_cx = 0.5 * kf_cx + 0.5 * traj_cx
+                pred_cy = 0.5 * kf_cy + 0.5 * traj_cy
+            prev_w = self.last_reliable_bbox[2] if self.last_reliable_bbox else 40
+            prev_h = self.last_reliable_bbox[3] if self.last_reliable_bbox else 40
+            occ_bbox = [int(pred_cx - prev_w//2), int(pred_cy - prev_h//2), prev_w, prev_h]
+            self.center = (int(pred_cx), int(pred_cy))
+            self.bbox = occ_bbox
+            dbg["scene2_state"] = "OCCLUDED"
+            dbg["scene2_occlusion_count"] = self.scene2_occlusion_count
+            dbg["detected"] = False
+            dbg["predicted"] = True
+            dbg["lost"] = False
+            dbg["center_x"] = int(pred_cx)
+            dbg["center_y"] = int(pred_cy)
+            dbg["reject_reason"] = "scene2_occlusion_bridge_prediction"
+            dbg["used_for_trajectory"] = True
+            out = {"frame_id": frame_id, "bbox": occ_bbox,
+                   "center": (int(pred_cx), int(pred_cy)),
+                   "score": 0.0, "detected": False,
+                   "predicted": True, "template_id": _SENTINEL}
+            out.update(dbg)
+            return out
+
         # Kalman predict (original coords)
         pred_x, pred_y = self.kalman.predict()
         dbg["predicted_x"] = int(pred_x)
@@ -1194,6 +1258,44 @@ class TraditionalTracker:
                 reject_history.append(f"rank{rank}:{reason}")
 
         if accepted_candidate is not None:
+            # --- Scene2 RECOVERY confirmation ---
+            if self.scene2_state == "RECOVERY":
+                rec_min_score = self.cfg.get("scene2_recovery_min_score", 0.36)
+                rec_ahead = self.cfg.get("scene2_recovery_max_ahead_y", 6)
+                cand_cy_orig = accepted_candidate["match_cy_orig"]
+                _, pred_y2 = self.kalman.predict()
+                if cand_cy_orig < pred_y2 - rec_ahead:
+                    accepted_candidate = None
+                    reject_history.append(f"rank{accepted_candidate.get('rank',1)}:scene2_recovery_ahead_of_prediction")
+                elif accepted_candidate["score"] < rec_min_score:
+                    accepted_candidate = None
+                    reject_history.append(f"rank{accepted_candidate.get('rank',1)}:scene2_recovery_score_below_min")
+                else:
+                    self.scene2_recovery_confirm_count += 1
+                    conf_frames = self.cfg.get("scene2_recovery_confirm_frames", 3)
+                    if self.scene2_recovery_confirm_count < conf_frames:
+                        # Still confirming — mark as predicted, not detected
+                        cand = accepted_candidate
+                        dbg["scene2_state"] = "RECOVERY"
+                        dbg["scene2_recovery_confirm_count"] = self.scene2_recovery_confirm_count
+                        dbg["detected"] = False
+                        dbg["predicted"] = True
+                        dbg["center_x"] = int(cand["match_cx_orig"])
+                        dbg["center_y"] = int(cand["match_cy_orig"])
+                        dbg["reject_reason"] = "scene2_recovery_confirm_pending"
+                        dbg["used_for_trajectory"] = False
+                        out = {"frame_id": frame_id,
+                               "bbox": [0,0,0,0], "center": (0,0),
+                               "score": cand["score"], "detected": False,
+                               "predicted": True,
+                               "template_id": cand.get("template_id", _SENTINEL)}
+                        out.update(dbg)
+                        return out
+                    else:
+                        # Confirmed — switch to TRACKING
+                        self.scene2_state = "TRACKING"
+                        self.scene2_recovery_confirm_count = 0
+
             # --- ACCEPT ---
             cand = accepted_candidate
             score = cand["score"]
@@ -1210,6 +1312,10 @@ class TraditionalTracker:
             self.last_reliable_center = self.center
             self.last_reliable_bbox = self.bbox.copy()
             self.last_reliable_frame = frame_id
+            self.reliable_history.append((frame_id, self.center[0], self.center[1],
+                                           self.bbox[2], self.bbox[3]))
+            if len(self.reliable_history) > 20:
+                self.reliable_history.pop(0)
 
             self._record_scale_usage(cand)
 
@@ -1240,6 +1346,7 @@ class TraditionalTracker:
             dbg["accepted_candidate_center_x"] = int(up_x)
             dbg["accepted_candidate_center_y"] = int(up_y)
             dbg["accepted_candidate_reject_history"] = ";".join(reject_history) if reject_history else ""
+            dbg["scene2_recovery_confirm_count"] = self.scene2_recovery_confirm_count
             # Vehicle prior debug
             vd = cand.get("_vehicle_details", {})
             if vd:
@@ -1248,6 +1355,7 @@ class TraditionalTracker:
                 dbg["scale_penalty"] = vd.get("scale_penalty", _SENTINEL)
                 dbg["forward_speed_penalty"] = vd.get("forward_speed_penalty", _SENTINEL)
                 dbg["dy"] = vd.get("dy", _SENTINEL)
+            dbg["scene2_state"] = self.scene2_state
             dbg["scene_strategy"] = "vehicle_prior" if use_vehicle_prior else ""
             dbg["scene2_max_forward_step"] = self.cfg.get("scene2_max_forward_step", _SENTINEL)
 
@@ -1311,6 +1419,7 @@ class TraditionalTracker:
         dbg["lost_count"] = self.lost_count
         dbg["center_x"] = int(self.center[0])
         dbg["center_y"] = int(self.center[1])
+        dbg["scene2_state"] = self.scene2_state
         if not dbg["reject_reason"]:
             dbg["reject_reason"] = ("score_below_threshold" if not pred_ok
                                     else "score_below_threshold")
