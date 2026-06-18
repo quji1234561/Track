@@ -34,6 +34,10 @@ try:
     from .scene3_legacy_tracker import Scene3LegacyTracker
 except ImportError:
     Scene3LegacyTracker = None
+try:
+    from .scene4_frame_diff_tracker import Scene4FrameDiffTracker
+except ImportError:
+    Scene4FrameDiffTracker = None
 from .visualize import draw_tracking_result
 from .metrics import (
     save_trajectory_csv,
@@ -170,6 +174,10 @@ def run_scene(scene_key, args):
             and cfg.get("use_scene3_legacy_tracker", False)
             and Scene3LegacyTracker is not None):
         tracker = Scene3LegacyTracker(cfg)
+    elif (scene_key == "scene4_drone"
+            and cfg.get("use_scene4_frame_diff_tracker", False)
+            and Scene4FrameDiffTracker is not None):
+        tracker = Scene4FrameDiffTracker(cfg)
     else:
         tracker = TraditionalTracker(cfg)
 
