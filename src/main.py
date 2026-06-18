@@ -98,6 +98,9 @@ DEBUG_CSV_FIELDS = [
     "scene4_best_score", "scene4_motion_score",
     "scene4_area_score", "scene4_prediction_score",
     "scene4_contrast_score", "scene4_lost_count",
+    "scene4_diff_max", "scene4_diff_mean", "scene4_diff_p95",
+    "scene4_mask_nonzero_raw", "scene4_mask_nonzero_after_morph",
+    "scene4_component_count_raw", "scene4_component_count_after_filter",
     "lost",
 ]
 

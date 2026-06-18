@@ -425,24 +425,24 @@ SCENES = {
         "scene4_stop_when_occluded": True,            # 遮挡时停止画框保留轨迹
         # 帧差追踪器
         "use_scene4_frame_diff_tracker": True,           # 使用帧差法追踪无人机
-        "scene4_diff_method": "three_frame",              # 三帧差分/两帧
-        "scene4_diff_threshold": 18,                      # 帧差二值化阈值(非自适应时)
-        "scene4_diff_use_adaptive": True,                 # 自适应阈值
-        "scene4_diff_percentile": 97.0,                   # 自适应百分位
-        "scene4_gaussian_blur": 3,                        # 高斯模糊核
-        "scene4_morph_open": 1,                           # 开运算迭代
-        "scene4_morph_dilate": 2,                         # 膨胀迭代
-        "scene4_min_area": 3,                             # 最小面积
-        "scene4_max_area": 220,                           # 最大面积
-        "scene4_min_w": 2, "scene4_max_w": 50,            # 宽范围
-        "scene4_min_h": 2, "scene4_max_h": 50,            # 高范围
+        "scene4_diff_method": "two_frame",                # 两帧差分
+        "scene4_diff_threshold": 3,                       # 极低阈值(调试)
+        "scene4_diff_use_adaptive": False,                 # 关闭自适应(调试)
+        "scene4_diff_percentile": 95.0,
+        "scene4_gaussian_blur": 0,                        # 不模糊(调试)
+        "scene4_morph_open": 0,                           # 不擦
+        "scene4_morph_dilate": 1,                         # 膨胀1
+        "scene4_min_area": 1,                             # 最小1px
+        "scene4_max_area": 800,                           # 最大800
+        "scene4_min_w": 1, "scene4_max_w": 120,           # 宽范围
+        "scene4_min_h": 1, "scene4_max_h": 120,           # 高范围
         "scene4_bbox_padding": 4,                         # bbox外扩
-        "scene4_search_radius": 90,                       # 搜索半径(未用,帧差全图)
+        "scene4_init_min_score": 0.18,                    # 初始化最低分数
         "scene4_max_lost": 20,                            # 最大丢失帧数
         "scene4_kalman_enabled": True,                    # Kalman预测
-        "scene4_prediction_gate": 120,                    # 离预测点最大距离
-        "scene4_max_jump": 140,                           # 最大帧间跳变
-        "scene4_min_candidate_score": 0.35,               # 最低候选分
+        "scene4_prediction_gate": 180,                    # 离预测点最大距离
+        "scene4_max_jump": 220,                           # 最大帧间跳变
+        "scene4_min_candidate_score": 0.20,               # 最低候选分
         "scene4_draw_predicted": True,                    # 显示预测框
         "scene4_hide_after_lost": False,                  # 丢失后不隐藏
     },
