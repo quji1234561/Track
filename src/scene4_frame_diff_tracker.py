@@ -52,14 +52,19 @@ class Scene4FrameDiffTracker:
 
     def track_frame(self, gray_frame, frame_id):
         rs = self.cfg.get("resize_scale", 0.5)
-        orig_h, orig_w = gray_frame.shape
 
-        # Resize for speed
+        # main.py's preprocess_frame returns [0,1] normalized float32.
+        # Scene4 frame-diff threshold expects 0~255 range.
+        work = gray_frame.astype(np.float32)
+        if work.size > 0 and work.max() <= 1.5:
+            work = work * 255.0
+        work = np.clip(work, 0, 255).astype(np.float32)
+
+        orig_h, orig_w = work.shape
         if rs < 1.0:
-            sf = cv2.resize(gray_frame, (int(orig_w * rs), int(orig_h * rs)))
+            sf = cv2.resize(work, (int(orig_w * rs), int(orig_h * rs)))
         else:
-            sf = gray_frame
-        sf = sf.astype(np.float32)
+            sf = work
 
         self._frame_count += 1
 
@@ -326,7 +331,7 @@ class Scene4FrameDiffTracker:
                     str(out_dir / "scene4_drone_diff_debug.mp4"),
                     fourcc, 15.0, (dw, dh))
             # Draw mask as green overlay
-            vis = (sf * 255).astype(np.uint8)
+            vis = np.clip(sf, 0, 255).astype(np.uint8)
             vis_col = cv2.cvtColor(vis, cv2.COLOR_GRAY2BGR)
             if mask is not None and mask.any():
                 vis_col[:, :, 1] = cv2.add(vis_col[:, :, 1], mask.astype(np.uint8))
