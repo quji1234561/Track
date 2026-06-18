@@ -978,6 +978,29 @@ class TraditionalTracker:
             out.update(dbg)
             return out
 
+        # --- Scene2 disable recovery after occlusion ---
+        hide_after = self.cfg.get("scene2_hide_after_occlusion_frame", None)
+        if (self.cfg.get("scene2_disable_recovery_after_occlusion", False)
+                and hide_after is not None and frame_id >= hide_after):
+            self.scene2_state = "RECOVERY_FAILED"
+            self.scene2_post_occlusion_lock = True
+            dbg["scene2_state"] = "RECOVERY_FAILED"
+            dbg["scene2_post_occlusion_lock"] = True
+            dbg["detected"] = False
+            dbg["predicted"] = False
+            dbg["lost"] = True
+            dbg["reject_reason"] = "scene2_recovery_disabled_after_occlusion"
+            dbg["used_for_trajectory"] = False
+            dbg["center_x"] = int(self.center[0]) if self.center else 0
+            dbg["center_y"] = int(self.center[1]) if self.center else 0
+            out = {"frame_id": frame_id,
+                   "bbox": self.bbox.copy() if self.bbox else [0,0,0,0],
+                   "center": self.center if self.center else (0,0),
+                   "score": -1.0, "detected": False, "predicted": False,
+                   "template_id": _SENTINEL}
+            out.update(dbg)
+            return out
+
         # --- Scene2 occlusion state machine ---
         occ_bridge = self.cfg.get("scene2_occlusion_bridge_enabled", False)
         occ_range = self.cfg.get("scene2_occlusion_frame_range", [])

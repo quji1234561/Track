@@ -209,7 +209,7 @@ def run_scene(scene_key, args):
 
     init_result["frame_id"] = frame_id
     results.append(init_result)
-    if init_used:
+    if init_used and init_result.get("center") is not None:
         trajectory.append(init_result["center"])
     debug_rows.append(_debug_row(init_result, frame_id))
 
@@ -314,7 +314,7 @@ def run_scene(scene_key, args):
         result["draw_predicted_trajectory"] = scene_draw_traj
 
         debug_rows.append(_debug_row(result, frame_id))
-        if used:
+        if used and result.get("center") is not None:
             trajectory.append(result["center"])
 
         if debug:

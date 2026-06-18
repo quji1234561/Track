@@ -38,8 +38,12 @@ def draw_tracking_result(frame, result, trajectory, scene_name,
     Returns:
         The modified frame.
     """
-    bbox = result["bbox"]
-    x, y, w, h = bbox
+    bbox = result.get("bbox")
+    if bbox is None or (isinstance(bbox, (list, tuple)) and len(bbox) == 4 and bbox[2] <= 0 and bbox[3] <= 0):
+        # No valid bbox — skip drawing boxes/centers, only draw trajectory
+        x = y = w = h = 0
+    else:
+        x, y, w, h = bbox
     score = result["score"]
     detected = result["detected"]
     predicted = result.get("predicted", False)
