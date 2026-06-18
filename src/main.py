@@ -78,6 +78,11 @@ DEBUG_CSV_FIELDS = [
     "candidate_final_score", "direction_penalty", "scale_penalty",
     "forward_speed_penalty", "dy", "dx", "forward_gate_enabled",
     "stable_detect_count", "scene_strategy", "scene2_max_forward_step",
+    # affine
+    "affine_a00", "affine_a01", "affine_a02",
+    "affine_a10", "affine_a11", "affine_a12",
+    # candidate raw position
+    "candidate_x", "candidate_y",
 ]
 
 # Per-scale score CSV fields — one row per candidate template per frame
@@ -289,16 +294,24 @@ def run_scene(scene_key, args):
                 used = False
         result["used_for_trajectory"] = used
 
-        # Inject config flags into result for debug CSV
-        result["show_predicted_bbox"] = show_predicted_bbox
-        result["draw_predicted_trajectory"] = draw_predicted_trajectory
-
         results.append(result)
-        debug_rows.append(_debug_row(result, frame_id))
-        # Collect per-scale scores from tracker
+        # Collect per-scale scores from tracker (before trajectory append)
         for cs in tracker._last_all_scores:
             cs["frame_id"] = frame_id
             scale_score_rows.append(cs)
+
+        # Compute actual drawing config (scene2 OCCLUDED overrides)
+        scene_show_bbox = show_predicted_bbox
+        scene_draw_traj = draw_predicted_trajectory
+        if result.get("scene2_state") == "OCCLUDED":
+            scene_show_bbox = cfg.get("scene2_draw_prediction_during_occlusion", True)
+            scene_draw_traj = True
+
+        # Inject actual config into result for debug CSV (after override)
+        result["show_predicted_bbox"] = scene_show_bbox
+        result["draw_predicted_trajectory"] = scene_draw_traj
+
+        debug_rows.append(_debug_row(result, frame_id))
         if used:
             trajectory.append(result["center"])
 
@@ -312,12 +325,6 @@ def run_scene(scene_key, args):
                   f"used_traj={used}")
 
         vis_frame = frame.copy()
-        # scene2 OCCLUDED: force show predicted bbox (bridge display)
-        scene_show_bbox = show_predicted_bbox
-        scene_draw_traj = draw_predicted_trajectory
-        if result.get("scene2_state") == "OCCLUDED":
-            scene_show_bbox = cfg.get("scene2_draw_prediction_during_occlusion", True)
-            scene_draw_traj = True
         draw_tracking_result(vis_frame, result, trajectory, scene_name,
                              show_predicted_bbox=scene_show_bbox,
                              draw_predicted_trajectory=scene_draw_traj)
