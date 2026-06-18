@@ -332,6 +332,15 @@ SCENES = {
         "scene3_exit_lost_frames": 5,                 # 连续低分帧数后判定退出
         "use_scene3_legacy_tracker": True,                # 使用独立Scene3LegacyTracker
         "scene3_simple_max_jump": 60,                     # 允许最大帧间位移(px)
+        # 反向补轨
+        "scene3_enable_backward_fill": True,              # 启用反向补轨
+        "scene3_backward_anchor_frame": 84,               # 正向锚点帧
+        "scene3_backward_end_frame": 0,                   # 反向终点
+        "scene3_backward_search_radius": 75,              # 反向搜索半径
+        "scene3_backward_threshold": 0.55,                # 反向阈值
+        "scene3_backward_max_lost": 5,                    # 反向最大丢失
+        "scene3_backward_max_jump": 45,                   # 反向最大跳变
+        "scene3_backward_draw_trajectory_only": True,     # 只画轨迹不画框
     },
 
     # =========================================================================

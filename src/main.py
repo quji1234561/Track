@@ -414,6 +414,52 @@ def run_scene(scene_key, args):
     if save_frames:
         print(f"Keyframes saved in: {OUTPUT_SUBDIRS['frames']}")
 
+    # --- Scene3 backward fill ---
+    if (scene_key == "scene3_bicycle"
+            and cfg.get("scene3_enable_backward_fill", False)):
+        from .scene3_backward_fill import run_backward_fill
+        # Find anchor bbox from results (first good detection after start_frame)
+        anchor_fid = cfg.get("scene3_backward_anchor_frame", 84)
+        anchor_bbox = None
+        for r in results:
+            if r["frame_id"] >= anchor_fid and r.get("detected", False):
+                anchor_bbox = r["bbox"]
+                break
+        if anchor_bbox is None and results:
+            # Fallback: use the first result
+            anchor_bbox = results[-1].get("bbox", None)
+        if anchor_bbox is not None and anchor_bbox[2] > 0 and anchor_bbox[3] > 0:
+            bw_results = run_backward_fill(
+                cfg["video"], cfg, anchor_fid, anchor_bbox,
+                output_dir=str(OUTPUT_SUBDIRS["trajectories"]))
+            if bw_results:
+                # Merge backward results into results list
+                bw_ids = {r["frame_id"] for r in bw_results}
+                results = [r for r in results if r["frame_id"] not in bw_ids]
+                # Convert backward results to tracker-compatible dicts
+                for br in bw_results:
+                    results.append({
+                        "frame_id": br["frame_id"],
+                        "bbox": [br["x"], br["y"], br["w"], br["h"]],
+                        "center": (br["center_x"], br["center_y"]),
+                        "score": br["score"],
+                        "detected": True,
+                        "predicted": False,
+                        "used_for_trajectory": True,
+                        "template_id": -1,
+                        "reject_reason": "scene3_backward_fill",
+                    })
+                results.sort(key=lambda r: r["frame_id"])
+                # Re-save trajectory with merged data
+                traj_path2 = OUTPUT_SUBDIRS["trajectories"] / f"{prefix}_trajectory.csv"
+                save_trajectory_csv(results, str(traj_path2))
+                # Save merged CSV
+                merged_path = OUTPUT_SUBDIRS["trajectories"] / f"{prefix}_merged.csv"
+                save_trajectory_csv(results, str(merged_path))
+                print(f"Merged trajectory saved: {merged_path}")
+        else:
+            print("  Backward fill skipped: no valid anchor bbox")
+
     print(f"Output video: {out_video_path}")
     return basic
 
