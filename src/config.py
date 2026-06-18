@@ -453,15 +453,28 @@ SCENES = {
         "scene4_use_template_verify": True,                # 模板NCC辅助
         "scene4_template_min_score": 0.20,
         "scene4_template_verify_weight": 0.20,
-        "scene4_prediction_gate": 160,
-        "scene4_max_jump": 180,
+        "scene4_prediction_gate": 80,
+        "scene4_max_jump": 70,
         "scene4_max_lost": 20,
-        "scene4_min_candidate_score": 0.20,
-        "scene4_use_hover_template_hold": True,            # 悬停模板保持
-        "scene4_hover_motion_score_threshold": 0.08,       # 低于此值触发hover
-        "scene4_hover_template_threshold": 0.28,           # hover模板NCC阈值
-        "scene4_hover_search_radius": 120,                 # hover搜索半径
-        "scene4_hover_max_frames": 60,                     # hover最大帧数
+        "scene4_min_candidate_score": 0.35,
+        # 稳定期
+        "scene4_stabilize_frames": 30,                     # 稳定期帧数
+        "scene4_stabilize_prediction_gate": 45,            # 稳定期预测门控
+        "scene4_stabilize_max_jump": 35,                   # 稳定期跳变限制
+        "scene4_stabilize_hover_radius": 45,               # 稳定期hover半径
+        # 固定bbox
+        "scene4_use_fixed_bbox_size": True,                # 固定bbox尺寸
+        "scene4_bbox_size_update_alpha": 0.05,            # bbox更新alpha
+        # 模板冻结
+        "scene4_freeze_template_frames": 60,               # 模板冻结帧数
+        "scene4_template_update_threshold": 0.65,          # 模板更新阈值
+        "scene4_template_min_score": 0.30,                 # 模板最低分
+        # hover
+        "scene4_use_hover_template_hold": True,
+        "scene4_hover_template_threshold": 0.45,           # hover阈值
+        "scene4_hover_search_radius": 45,                  # hover搜索半径
+        "scene4_hover_max_shift": 35,                      # hover最大位移
+        "scene4_hover_max_frames": 60,
         "scene4_draw_predicted": True,                    # 显示预测框
         "scene4_hide_after_lost": False,                  # 丢失后不隐藏
     },

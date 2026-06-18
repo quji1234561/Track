@@ -30,11 +30,17 @@ class Scene4FrameDiffTracker:
         self.initialized = False
         self.scene4_state = "INIT"
         self.hover_hold_count = 0
+        self.init_frame_id = -1
+        self.init_center = None
+        self.fixed_box_w = 0
+        self.fixed_box_h = 0
+        self.initial_template = None
 
         # Reliable template for hover hold
         self.last_reliable_template = None
         self.last_reliable_bbox = None
         self.last_reliable_center = None
+        self._frames_since_init = 0
 
         # Frame buffers
         self._prev_gray = None
@@ -93,9 +99,15 @@ class Scene4FrameDiffTracker:
                 self.kalman = KalmanFilter2D(self.center[0], self.center[1])
                 self.initialized = True
                 self.scene4_state = "TRACKING"
+                self.init_frame_id = frame_id
+                self.init_center = self.center
+                self.fixed_box_w = self.bbox[2]
+                self.fixed_box_h = self.bbox[3]
                 self.last_reliable_bbox = self.bbox.copy()
                 self.last_reliable_center = self.center
                 self._update_template(gray_frame)
+                self.initial_template = (self.last_reliable_template.copy()
+                                          if self.last_reliable_template is not None else None)
                 print(f"  [Scene4] Manual init: bbox={self.bbox}, center={self.center}")
                 return {"frame_id": frame_id, "bbox": self.bbox, "center": self.center,
                         "score": 1.0, "detected": True, "predicted": False,
@@ -144,9 +156,15 @@ class Scene4FrameDiffTracker:
                             self.kalman = KalmanFilter2D(ggx, ggy)
                             self.initialized = True
                             self.scene4_state = "TRACKING"
+                            self.init_frame_id = frame_id
+                            self.init_center = self.center
+                            self.fixed_box_w = self.bbox[2]
+                            self.fixed_box_h = self.bbox[3]
                             self.last_reliable_bbox = self.bbox.copy()
                             self.last_reliable_center = self.center
                             self._update_template(gray_frame)
+                            self.initial_template = (self.last_reliable_template.copy()
+                                                      if self.last_reliable_template is not None else None)
                             print(f"  [Scene4] Template init: bbox={self.bbox}, "
                                   f"center={self.center}, score={r['score']:.4f}")
                             return {"frame_id": frame_id, "bbox": self.bbox,
@@ -282,27 +300,67 @@ class Scene4FrameDiffTracker:
             dbg["scene4_prediction_score"] = best["prediction_score"]
             dbg["scene4_template_score"] = best["template_score"]
 
-        min_score = self.cfg.get("scene4_min_candidate_score", 0.20)
-        if best and best["score"] >= min_score:
+        self._frames_since_init = (frame_id - self.init_frame_id
+                                    if self.init_frame_id >= 0 else 999)
+        # Strict gates
+        stab_frames = self.cfg.get("scene4_stabilize_frames", 30)
+        if self._frames_since_init <= stab_frames:
+            pred_gate = self.cfg.get("scene4_stabilize_prediction_gate", 45)
+            max_jump = self.cfg.get("scene4_stabilize_max_jump", 35)
+        else:
+            pred_gate = self.cfg.get("scene4_prediction_gate", 80)
+            max_jump = self.cfg.get("scene4_max_jump", 70)
+
+        tmpl_min = self.cfg.get("scene4_template_min_score", 0.30)
+        min_score = self.cfg.get("scene4_min_candidate_score", 0.35)
+        fixed_bbox = self.cfg.get("scene4_use_fixed_bbox_size", True)
+        freeze_tmpl = (self.cfg.get("scene4_freeze_template_frames", 60)
+                       and self._frames_since_init <= self.cfg.get("scene4_freeze_template_frames", 60))
+
+        if best and best["score"] >= min_score and best.get("template_score", 0) >= tmpl_min:
             cx_o = int(best["center_x"] / rs)
             cy_o = int(best["center_y"] / rs)
-            ox, oy = int(best["x"] / rs), int(best["y"] / rs)
-            ow, oh = int(best["w"] / rs), int(best["h"] / rs)
+            dist_pred = np.sqrt((cx_o - pred_cx)**2 + (cy_o - pred_cy)**2)
+            dist_prev = (np.sqrt((cx_o - self.center[0])**2 + (cy_o - self.center[1])**2)
+                         if self.center else 0)
+            dbg["scene4_dist_to_pred"] = dist_pred
+            dbg["scene4_dist_to_prev"] = dist_prev
+            if self.init_center:
+                dbg["scene4_dist_to_init"] = np.sqrt((cx_o - self.init_center[0])**2
+                                                      + (cy_o - self.init_center[1])**2)
 
-            max_jump = self.cfg.get("scene4_max_jump", 180)
-            if self.center is None or np.sqrt((cx_o - self.center[0])**2
-                                               + (cy_o - self.center[1])**2) <= max_jump:
+            if dist_pred > pred_gate:
+                dbg["reject_reason"] = "scene4_strict_prediction_gate_reject"
+            elif dist_prev > max_jump:
+                dbg["reject_reason"] = "scene4_strict_jump_reject"
+            elif (self._frames_since_init <= stab_frames and self.init_center
+                  and np.sqrt((cx_o - self.init_center[0])**2
+                              + (cy_o - self.init_center[1])**2) > 120):
+                dbg["reject_reason"] = "scene4_stabilize_init_region_reject"
+            else:
                 self.kalman.update(cx_o, cy_o)
+                ow_cand = int(best["w"] / rs)
+                oh_cand = int(best["h"] / rs)
+                if fixed_bbox and self.fixed_box_w > 0:
+                    ow = self.fixed_box_w
+                    oh = self.fixed_box_h
+                else:
+                    alpha = self.cfg.get("scene4_bbox_size_update_alpha", 0.05)
+                    ow = int(self.fixed_box_w * (1 - alpha) + ow_cand * alpha)
+                    oh = int(self.fixed_box_h * (1 - alpha) + oh_cand * alpha)
+                ox = int(cx_o - ow // 2)
+                oy = int(cy_o - oh // 2)
                 self.bbox = [ox, oy, ow, oh]
                 self.center = (cx_o, cy_o)
                 self.lost_count = 0
                 self.prev_score = best["score"]
                 self.scene4_state = "TRACKING"
                 self.hover_hold_count = 0
-                if best.get("template_score", 0) >= 0.35:
-                    self.last_reliable_bbox = self.bbox.copy()
-                    self.last_reliable_center = self.center
-                if best.get("template_score", 0) >= 0.45:
+                self.last_reliable_bbox = self.bbox.copy()
+                self.last_reliable_center = self.center
+                ts = best.get("template_score", 0)
+                if (not freeze_tmpl and ts >= self.cfg.get("scene4_template_update_threshold", 0.65)
+                        and dist_pred < pred_gate * 0.5):
                     self._update_template(gray_frame)
 
                 dbg["scene4_state"] = "TRACKING"
@@ -315,12 +373,11 @@ class Scene4FrameDiffTracker:
                 out.update(dbg)
                 self._prev_gray = sf.copy()
                 return out
-            else:
-                dbg["reject_reason"] = "scene4_jump_too_large"
 
         # --- Hover template hold ---
-        hover_thr = self.cfg.get("scene4_hover_template_threshold", 0.28)
-        hover_rad = self.cfg.get("scene4_hover_search_radius", 120)
+        hover_thr = self.cfg.get("scene4_hover_template_threshold", 0.45)
+        hover_rad = self.cfg.get("scene4_hover_search_radius", 45)
+        hover_max_shift = self.cfg.get("scene4_hover_max_shift", 35)
         if (self.cfg.get("scene4_use_hover_template_hold", False)
                 and self.last_reliable_template is not None
                 and self.last_reliable_center is not None):
@@ -350,25 +407,30 @@ class Scene4FrameDiffTracker:
                             hh_o = int(hr["h"] / rs)
                             hcx = hx_o + hw_o // 2
                             hcy = hy_o + hh_o // 2
-                            self.kalman.update(hcx, hcy)
-                            self.bbox = [hx_o, hy_o, hw_o, hh_o]
-                            self.center = (hcx, hcy)
-                            self.lost_count = 0
-                            self.prev_score = hr["score"]
-                            self.scene4_state = "HOVER_HOLD"
-                            self.hover_hold_count += 1
-                            dbg["scene4_state"] = "HOVER_HOLD"
+                            hshift = np.sqrt((hcx - pred_cx)**2 + (hcy - pred_cy)**2)
                             dbg["scene4_hover_template_score"] = hr["score"]
-                            dbg["scene4_hover_hold_count"] = self.hover_hold_count
-                            dbg["reject_reason"] = "scene4_hover_template_hold"
-                            out = {"frame_id": frame_id, "bbox": self.bbox,
-                                   "center": self.center, "score": hr["score"],
-                                   "detected": True, "predicted": False,
-                                   "lost": False, "used_for_trajectory": True,
-                                   "template_id": _SENTINEL}
-                            out.update(dbg)
-                            self._prev_gray = sf.copy()
-                            return out
+                            dbg["scene4_hover_shift"] = hshift
+                            if hshift > hover_max_shift:
+                                dbg["reject_reason"] = "scene4_hover_shift_too_large"
+                            else:
+                                self.kalman.update(hcx, hcy)
+                                self.bbox = [hx_o, hy_o, hw_o, hh_o]
+                                self.center = (hcx, hcy)
+                                self.lost_count = 0
+                                self.prev_score = hr["score"]
+                                self.scene4_state = "HOVER_HOLD"
+                                self.hover_hold_count += 1
+                                dbg["scene4_state"] = "HOVER_HOLD"
+                                dbg["scene4_hover_hold_count"] = self.hover_hold_count
+                                dbg["reject_reason"] = "scene4_hover_template_hold"
+                                out = {"frame_id": frame_id, "bbox": self.bbox,
+                                       "center": self.center, "score": hr["score"],
+                                       "detected": True, "predicted": False,
+                                       "lost": False, "used_for_trajectory": True,
+                                       "template_id": _SENTINEL}
+                                out.update(dbg)
+                                self._prev_gray = sf.copy()
+                                return out
                 except Exception:
                     pass
 
