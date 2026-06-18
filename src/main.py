@@ -64,6 +64,20 @@ DEBUG_CSV_FIELDS = [
     # last_accepted
     "last_accepted_center_x", "last_accepted_center_y",
     "last_accepted_frame_id",
+    # scene2 state machine
+    "scene2_state", "scene2_occlusion_count",
+    "scene2_recovery_confirm_count",
+    # GMC
+    "gmc_valid", "gmc_inlier_count",
+    "comp_pred_x", "comp_pred_y",
+    "kalman_pred_x", "kalman_pred_y",
+    "residual_vx", "residual_vy",
+    # recovery validation
+    "dx_comp", "dy_comp", "dist_comp",
+    # scene2 vehicle prior details
+    "candidate_final_score", "direction_penalty", "scale_penalty",
+    "forward_speed_penalty", "dy", "dx", "forward_gate_enabled",
+    "stable_detect_count", "scene_strategy", "scene2_max_forward_step",
 ]
 
 # Per-scale score CSV fields — one row per candidate template per frame
@@ -261,14 +275,18 @@ def run_scene(scene_key, args):
         result["frame_id"] = frame_id
 
         # --- Compute used_for_trajectory ---
-        is_detected = result.get("detected", False)
-        is_predicted = result.get("predicted", False)
-        if is_detected:
-            used = True
-        elif is_predicted and draw_predicted_trajectory:
-            used = True
+        # scene2 OCCLUDED: always honor tracker's used_for_trajectory (bridge trajectory)
+        if result.get("scene2_state") == "OCCLUDED":
+            used = bool(result.get("used_for_trajectory", True))
         else:
-            used = False
+            is_detected = result.get("detected", False)
+            is_predicted = result.get("predicted", False)
+            if is_detected:
+                used = True
+            elif is_predicted and draw_predicted_trajectory:
+                used = True
+            else:
+                used = False
         result["used_for_trajectory"] = used
 
         # Inject config flags into result for debug CSV
@@ -294,9 +312,15 @@ def run_scene(scene_key, args):
                   f"used_traj={used}")
 
         vis_frame = frame.copy()
+        # scene2 OCCLUDED: force show predicted bbox (bridge display)
+        scene_show_bbox = show_predicted_bbox
+        scene_draw_traj = draw_predicted_trajectory
+        if result.get("scene2_state") == "OCCLUDED":
+            scene_show_bbox = cfg.get("scene2_draw_prediction_during_occlusion", True)
+            scene_draw_traj = True
         draw_tracking_result(vis_frame, result, trajectory, scene_name,
-                             show_predicted_bbox=show_predicted_bbox,
-                             draw_predicted_trajectory=draw_predicted_trajectory)
+                             show_predicted_bbox=scene_show_bbox,
+                             draw_predicted_trajectory=scene_draw_traj)
         out_writer.write(vis_frame)
 
         # Keyframes at intervals (not every frame)
