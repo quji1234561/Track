@@ -25,6 +25,11 @@ import numpy as np
 from .ncc import multi_template_search
 from .kalman import KalmanFilter2D
 from .preprocess import preprocess_template
+try:
+    from .global_motion import estimate_global_affine, apply_affine
+    _HAS_GMC = True
+except ImportError:
+    _HAS_GMC = False
 
 # --- Global search strategy constants ---
 FULL_SEARCH_SCALE_MAX = 0.5
@@ -138,6 +143,13 @@ class TraditionalTracker:
         self.scene2_state = "TRACKING"       # TRACKING / OCCLUDED / RECOVERY
         self.scene2_occlusion_count = 0
         self.scene2_recovery_confirm_count = 0
+
+        # --- GMC (global motion compensation) state ---
+        self.prev_gray_for_gmc = None
+        self.last_global_affine = None
+        self.gmc_residual_vx = 0.0
+        self.gmc_residual_vy = 0.0
+        self.gmc_residual_history = []  # list of (dx, dy) from last 20 reliable frames
 
         # --- Init confirmation state ---
         self._init_pending = False
@@ -966,23 +978,49 @@ class TraditionalTracker:
 
         # --- Handle OCCLUDED state ---
         if self.scene2_state == "OCCLUDED":
-            # Use Kalman + reliable_history median velocity to predict
+            use_gmc = (self.cfg.get("scene2_use_global_motion_compensation", False)
+                       and _HAS_GMC)
             kf_cx, kf_cy = self.kalman.predict()
-            self.scene2_occlusion_count += 0  # already set above
-            pred_cx, pred_cy = kf_cx, kf_cy
-            # Blend with trajectory velocity if reliable_history has >= 3 points
-            if len(self.reliable_history) >= 3:
-                vxs = [self.reliable_history[i][1] - self.reliable_history[i-1][1]
-                       for i in range(1, len(self.reliable_history))]
-                vys = [self.reliable_history[i][2] - self.reliable_history[i-1][2]
-                       for i in range(1, len(self.reliable_history))]
-                med_vx = sorted(vxs)[len(vxs)//2]
-                med_vy = sorted(vys)[len(vys)//2]
-                lr_cx, lr_cy = self.reliable_history[-1][1], self.reliable_history[-1][2]
-                traj_cx = lr_cx + med_vx * self.scene2_occlusion_count
-                traj_cy = lr_cy + med_vy * self.scene2_occlusion_count
-                pred_cx = 0.5 * kf_cx + 0.5 * traj_cx
-                pred_cy = 0.5 * kf_cy + 0.5 * traj_cy
+            dbg["kalman_pred_x"] = int(kf_cx)
+            dbg["kalman_pred_y"] = int(kf_cy)
+
+            # GMC prediction: apply affine + residual velocity
+            gmc_ok = False
+            comp_cx, comp_cy = kf_cx, kf_cy
+            if use_gmc and self.last_global_affine is not None and self.last_reliable_center:
+                lr_cx, lr_cy = self.last_reliable_center
+                bg_x, bg_y = apply_affine(self.last_global_affine, lr_cx, lr_cy)
+                comp_cx = bg_x + self.gmc_residual_vx
+                comp_cy = bg_y + self.gmc_residual_vy
+                gmc_ok = True
+                dbg["gmc_valid"] = True
+                dbg["comp_pred_x"] = int(comp_cx)
+                dbg["comp_pred_y"] = int(comp_cy)
+            else:
+                dbg["gmc_valid"] = False
+
+            # Blend: GMC + Kalman
+            if use_gmc and gmc_ok:
+                gmc_w = self.cfg.get("scene2_compensated_prediction_weight", 0.75)
+                kf_w = self.cfg.get("scene2_kalman_prediction_weight", 0.25)
+                pred_cx = gmc_w * comp_cx + kf_w * kf_cx
+                pred_cy = gmc_w * comp_cy + kf_w * kf_cy
+                dbg["reject_reason"] = "scene2_occlusion_bridge_prediction_gmc"
+            else:
+                pred_cx, pred_cy = kf_cx, kf_cy
+                # Trajectory median velocity fallback
+                if len(self.reliable_history) >= 3:
+                    vxs = [self.reliable_history[i][1] - self.reliable_history[i-1][1]
+                           for i in range(1, len(self.reliable_history))]
+                    vys = [self.reliable_history[i][2] - self.reliable_history[i-1][2]
+                           for i in range(1, len(self.reliable_history))]
+                    med_vx = sorted(vxs)[len(vxs)//2]
+                    med_vy = sorted(vys)[len(vys)//2]
+                    lr_cx2, lr_cy2 = self.reliable_history[-1][1], self.reliable_history[-1][2]
+                    pred_cx = 0.5 * kf_cx + 0.5 * (lr_cx2 + med_vx * self.scene2_occlusion_count)
+                    pred_cy = 0.5 * kf_cy + 0.5 * (lr_cy2 + med_vy * self.scene2_occlusion_count)
+                dbg["reject_reason"] = "scene2_occlusion_bridge_prediction"
+
             prev_w = self.last_reliable_bbox[2] if self.last_reliable_bbox else 40
             prev_h = self.last_reliable_bbox[3] if self.last_reliable_bbox else 40
             occ_bbox = [int(pred_cx - prev_w//2), int(pred_cy - prev_h//2), prev_w, prev_h]
@@ -995,13 +1033,14 @@ class TraditionalTracker:
             dbg["lost"] = False
             dbg["center_x"] = int(pred_cx)
             dbg["center_y"] = int(pred_cy)
-            dbg["reject_reason"] = "scene2_occlusion_bridge_prediction"
             dbg["used_for_trajectory"] = True
             out = {"frame_id": frame_id, "bbox": occ_bbox,
                    "center": (int(pred_cx), int(pred_cy)),
                    "score": 0.0, "detected": False,
                    "predicted": True, "template_id": _SENTINEL}
             out.update(dbg)
+            if _HAS_GMC:
+                self.prev_gray_for_gmc = scaled_frame.copy()
             return out
 
         # Kalman predict (original coords)
@@ -1262,14 +1301,50 @@ class TraditionalTracker:
             if self.scene2_state == "RECOVERY":
                 rec_min_score = self.cfg.get("scene2_recovery_min_score", 0.36)
                 rec_ahead = self.cfg.get("scene2_recovery_max_ahead_y", 6)
-                cand_cy_orig = accepted_candidate["match_cy_orig"]
-                _, pred_y2 = self.kalman.predict()
-                if cand_cy_orig < pred_y2 - rec_ahead:
-                    accepted_candidate = None
-                    reject_history.append(f"rank{accepted_candidate.get('rank',1)}:scene2_recovery_ahead_of_prediction")
+                cand_cx = accepted_candidate["match_cx_orig"]
+                cand_cy = accepted_candidate["match_cy_orig"]
+
+                # Use GMC-compensated prediction as reference if available
+                use_gmc_rec = (self.cfg.get("scene2_recovery_use_compensated_prediction", False)
+                               and _HAS_GMC and self.last_global_affine is not None
+                               and self.last_reliable_center is not None)
+                if use_gmc_rec:
+                    lr_cx, lr_cy = self.last_reliable_center
+                    ref_x, ref_y = apply_affine(self.last_global_affine, lr_cx, lr_cy)
+                    ref_x += self.gmc_residual_vx
+                    ref_y += self.gmc_residual_vy
+                    dbg["comp_pred_x"] = int(ref_x)
+                    dbg["comp_pred_y"] = int(ref_y)
+                else:
+                    _, ref_y2 = self.kalman.predict()
+                    ref_x, ref_y = cand_cx, ref_y2  # fallback: use Kalman for y, current for x
+
+                dx_comp = cand_cx - ref_x
+                dy_comp = cand_cy - ref_y
+                dist_comp = math.hypot(dx_comp, dy_comp)
+                dbg["dx_comp"] = dx_comp
+                dbg["dy_comp"] = dy_comp
+                dbg["dist_comp"] = dist_comp
+
+                rejected = False
+                if abs(dx_comp) > self.cfg.get("scene2_recovery_max_pred_x_error", 12):
+                    rejected = True
+                    reject_history.append(f"rank{accepted_candidate.get('rank',1)}:scene2_recovery_x_too_far_from_gmc_prediction")
+                elif abs(dy_comp) > self.cfg.get("scene2_recovery_max_pred_y_error", 8):
+                    rejected = True
+                    reject_history.append(f"rank{accepted_candidate.get('rank',1)}:scene2_recovery_y_too_far_from_gmc_prediction")
+                elif dist_comp > self.cfg.get("scene2_recovery_max_total_distance", 18):
+                    rejected = True
+                    reject_history.append(f"rank{accepted_candidate.get('rank',1)}:scene2_recovery_too_far_from_gmc_prediction")
+                elif cand_cy < ref_y - rec_ahead:
+                    rejected = True
+                    reject_history.append(f"rank{accepted_candidate.get('rank',1)}:scene2_recovery_ahead_of_gmc_prediction")
                 elif accepted_candidate["score"] < rec_min_score:
-                    accepted_candidate = None
+                    rejected = True
                     reject_history.append(f"rank{accepted_candidate.get('rank',1)}:scene2_recovery_score_below_min")
+
+                if rejected:
+                    accepted_candidate = None
                 else:
                     self.scene2_recovery_confirm_count += 1
                     conf_frames = self.cfg.get("scene2_recovery_confirm_frames", 3)
@@ -1316,6 +1391,35 @@ class TraditionalTracker:
                                            self.bbox[2], self.bbox[3]))
             if len(self.reliable_history) > 20:
                 self.reliable_history.pop(0)
+
+            # GMC: estimate affine from prev_gray to current, compute residual
+            use_gmc2 = (self.cfg.get("scene2_use_global_motion_compensation", False)
+                        and _HAS_GMC)
+            if use_gmc2 and self.prev_gray_for_gmc is not None:
+                A, n_in = estimate_global_affine(
+                    self.prev_gray_for_gmc, scaled_frame,
+                    exclude_bbox=self.bbox,
+                    cfg=self.cfg)
+                dbg["gmc_valid"] = (A is not None)
+                dbg["gmc_inlier_count"] = n_in
+                if A is not None:
+                    self.last_global_affine = A
+                    # Compute residual: actual_center - background_mapped_prev_center
+                    if self.last_reliable_center is not None and len(self.reliable_history) >= 2:
+                        prev_cx2, prev_cy2 = self.reliable_history[-2][1], self.reliable_history[-2][2]
+                        bgx, bgy = apply_affine(A, prev_cx2, prev_cy2)
+                        rx = self.center[0] - bgx
+                        ry = self.center[1] - bgy
+                        self.gmc_residual_history.append((rx, ry))
+                        if len(self.gmc_residual_history) > 20:
+                            self.gmc_residual_history.pop(0)
+                        if len(self.gmc_residual_history) >= 3:
+                            rxs = sorted([r[0] for r in self.gmc_residual_history])
+                            rys = sorted([r[1] for r in self.gmc_residual_history])
+                            self.gmc_residual_vx = rxs[len(rxs)//2]
+                            self.gmc_residual_vy = rys[len(rys)//2]
+                    dbg["residual_vx"] = self.gmc_residual_vx
+                    dbg["residual_vy"] = self.gmc_residual_vy
 
             self._record_scale_usage(cand)
 
@@ -1542,6 +1646,10 @@ class TraditionalTracker:
                 if fr_reject_history:
                     dbg["reject_reason"] = f"full_re_search_all_rejected({len(fr_reject_history)})"
                 print(f"  Full re-search REJECTED: all {len(fr_reject_history)} candidates failed")
+
+        # Save for next GMC frame
+        if _HAS_GMC:
+            self.prev_gray_for_gmc = scaled_frame.copy()
 
         out = {
             "frame_id": frame_id,

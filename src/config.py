@@ -244,6 +244,19 @@ SCENES = {
         "scene2_recovery_max_ahead_y": 6,                 # 恢复候选不能超前预测太多(px)
         "scene2_recovery_min_score": 0.36,                # 恢复阶段降低分数门槛
         "scene2_draw_prediction_during_occlusion": True,  # 遮挡期间是否显示预测框
+        # 全局运动补偿（抵消航拍相机运动）
+        "scene2_use_global_motion_compensation": True,     # 启用全局运动补偿
+        "scene2_gmc_max_corners": 300,                     # 角点最大数量
+        "scene2_gmc_quality_level": 0.01,                  # 角点质量阈值
+        "scene2_gmc_min_distance": 8,                      # 角点最小间距
+        "scene2_gmc_min_valid_tracks": 30,                 # 最少有效跟踪点数
+        "scene2_gmc_exclude_margin": 80,                   # 排除目标周围区域(px)
+        "scene2_gmc_ransac_thresh": 3.0,                   # RANSAC重投影阈值
+        "scene2_prediction_use_compensated": True,          # 遮挡期间使用补偿预测
+        "scene2_compensated_prediction_weight": 0.75,      # 补偿预测权重
+        "scene2_kalman_prediction_weight": 0.25,           # Kalman预测权重
+        "scene2_recovery_use_compensated_prediction": True, # 恢复阶段使用补偿预测作为参照
+        "scene2_gmc_fallback_to_kalman": True,              # GMC失败时回退到Kalman
     },
 
     # =========================================================================
