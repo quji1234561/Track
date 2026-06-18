@@ -424,25 +424,44 @@ SCENES = {
         "scene4_min_local_contrast": 8.0,             # 目标区域最低局部对比度
         "scene4_stop_when_occluded": True,            # 遮挡时停止画框保留轨迹
         # 帧差追踪器
-        "use_scene4_frame_diff_tracker": True,           # 使用帧差法追踪无人机
-        "scene4_diff_method": "two_frame",                # 两帧差分
-        "scene4_diff_threshold": 3,                       # 极低阈值(调试)
-        "scene4_diff_use_adaptive": False,                 # 关闭自适应(调试)
-        "scene4_diff_percentile": 95.0,
-        "scene4_gaussian_blur": 0,                        # 不模糊(调试)
-        "scene4_morph_open": 0,                           # 不擦
-        "scene4_morph_dilate": 1,                         # 膨胀1
-        "scene4_min_area": 1,                             # 最小1px
-        "scene4_max_area": 800,                           # 最大800
-        "scene4_min_w": 1, "scene4_max_w": 120,           # 宽范围
-        "scene4_min_h": 1, "scene4_max_h": 120,           # 高范围
-        "scene4_bbox_padding": 4,                         # bbox外扩
-        "scene4_init_min_score": 0.18,                    # 初始化最低分数
-        "scene4_max_lost": 20,                            # 最大丢失帧数
-        "scene4_kalman_enabled": True,                    # Kalman预测
-        "scene4_prediction_gate": 180,                    # 离预测点最大距离
-        "scene4_max_jump": 220,                           # 最大帧间跳变
-        "scene4_min_candidate_score": 0.20,               # 最低候选分
+        "use_scene4_frame_diff_tracker": True,           # 混合跟踪器
+        "scene4_init_mode": "template_roi",               # manual_bbox / template_roi
+        "scene4_use_manual_init_bbox": True,              # 手动初始框初始化
+        "scene4_manual_init_frame": 0,                    # 手动初始化帧号
+        "scene4_manual_init_bbox": [1581, 1071, 161, 59], # [原x,原y,原w,原h]
+        "scene4_use_template_init": True,                 # 模板ROI初始化(备选)
+        "scene4_init_search_roi": [1450, 980, 500, 260],  # 初始化搜索ROI
+        "scene4_template_init_threshold": 0.34,           # 模板初始化阈值
+        "scene4_use_frame_diff_init": False,              # 禁用全图帧差自动初始化
+        "scene4_diff_after_initialized_only": True,       # 初始化后才用帧差
+        "scene4_local_search_radius": 180,                # 局部帧差搜索半径
+        "scene4_diff_method": "two_frame",
+        "scene4_diff_threshold": 3,
+        "scene4_diff_use_adaptive": False,
+        "scene4_gaussian_blur": 0,
+        "scene4_morph_open": 0,
+        "scene4_morph_dilate": 1,
+        "scene4_min_area": 8,                             # 最小面积(过滤树叶)
+        "scene4_max_area": 800,
+        "scene4_min_w": 4, "scene4_max_w": 120,
+        "scene4_min_h": 4, "scene4_max_h": 120,
+        "scene4_expected_area": 60,                        # 期望面积
+        "scene4_area_tolerance": 80,                       # 面积容差
+        "scene4_bbox_padding": 4,
+        "scene4_use_exclude_rois": True,                   # 排除右下角树叶
+        "scene4_exclude_rois": [[1700, 1350, 748, 698]],
+        "scene4_use_template_verify": True,                # 模板NCC辅助
+        "scene4_template_min_score": 0.20,
+        "scene4_template_verify_weight": 0.20,
+        "scene4_prediction_gate": 160,
+        "scene4_max_jump": 180,
+        "scene4_max_lost": 20,
+        "scene4_min_candidate_score": 0.20,
+        "scene4_use_hover_template_hold": True,            # 悬停模板保持
+        "scene4_hover_motion_score_threshold": 0.08,       # 低于此值触发hover
+        "scene4_hover_template_threshold": 0.28,           # hover模板NCC阈值
+        "scene4_hover_search_radius": 120,                 # hover搜索半径
+        "scene4_hover_max_frames": 60,                     # hover最大帧数
         "scene4_draw_predicted": True,                    # 显示预测框
         "scene4_hide_after_lost": False,                  # 丢失后不隐藏
     },
