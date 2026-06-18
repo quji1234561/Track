@@ -127,6 +127,12 @@ class TraditionalTracker:
         self.last_accepted_center = None
         self.last_accepted_frame_id = -1
 
+        # --- Scene2 stable detect counter (for delayed gate) ---
+        self.stable_detect_count = 0
+        self.last_reliable_center = None    # only updated on confident accept
+        self.last_reliable_bbox = None
+        self.last_reliable_frame = -1
+
         # --- Init confirmation state ---
         self._init_pending = False
         self._init_candidate_pos = None
@@ -245,22 +251,21 @@ class TraditionalTracker:
                                         prev_cx, prev_cy, prev_w, prev_h):
         """Scene2 vehicle prior: compute weighted final_score for a candidate.
 
-        final = ncc_w * norm_ncc - dist_w * norm_dist - dir_w * dir_penalty - scale_w * scale_penalty
+        final = ncc_w * norm_ncc - dist_w * norm_dist - dir_w * dir_penalty
+                - scale_w * scale_penalty - fwd_w * forward_speed_penalty
         """
-        ncc_w = self.cfg.get("scene2_ncc_weight", 0.55)
+        ncc_w = self.cfg.get("scene2_ncc_weight", 0.50)
         dist_w = self.cfg.get("scene2_distance_penalty_weight", 0.20)
         dir_w = self.cfg.get("scene2_direction_penalty_weight", 0.15)
         scale_w = self.cfg.get("scene2_scale_penalty_weight", 0.10)
+        fwd_w = self.cfg.get("scene2_forward_speed_penalty_weight", 0.20)
 
-        # Normalized NCC (already in [-1,1])
         norm_ncc = max(0.0, cand_score)
 
-        # Distance penalty: distance from Kalman prediction
         max_dist = max(1.0, self.cfg.get("max_motion_distance", 50))
         dist = math.hypot(cand_cx - pred_x, cand_cy - pred_y)
         norm_dist = min(1.0, dist / max_dist)
 
-        # Direction penalty
         dir_y = self.cfg.get("motion_direction_y", 0)
         tolerance = self.cfg.get("motion_direction_tolerance", 10)
         dy = cand_cy - prev_cy
@@ -270,7 +275,6 @@ class TraditionalTracker:
         elif dir_y == 1 and dy < -tolerance:
             dir_penalty = min(1.0, (-dy - tolerance) / 30.0)
 
-        # Scale penalty: how much scale changed
         max_lat = self.cfg.get("scene2_max_lateral_shift", 25)
         dx = abs(cand_cx - prev_cx)
         lat_penalty = min(1.0, dx / max_lat) if dx > max_lat else 0.0
@@ -280,14 +284,25 @@ class TraditionalTracker:
             prev_area = prev_w * prev_h
             cand_area = cand_w * cand_h
             ratio = max(cand_area / prev_area, prev_area / cand_area)
-            scale_penalty = min(1.0, (ratio - 1.0) / 1.0)  # >2x change = max penalty
+            scale_penalty = min(1.0, (ratio - 1.0) / 1.0)
+
+        # Forward speed penalty
+        max_fwd = self.cfg.get("scene2_max_forward_step", 8)
+        back_tol = self.cfg.get("scene2_backward_tolerance", 4)
+        fwd_penalty = 0.0
+        if dy < -max_fwd:
+            fwd_penalty = min(1.0, abs(dy + max_fwd) / max_fwd)
+        if dy > back_tol:
+            fwd_penalty = max(fwd_penalty, min(1.0, (dy - back_tol) / back_tol))
 
         final = (ncc_w * norm_ncc - dist_w * norm_dist
-                 - dir_w * dir_penalty - scale_w * (scale_penalty + lat_penalty * 0.5))
+                 - dir_w * dir_penalty - scale_w * (scale_penalty + lat_penalty * 0.5)
+                 - fwd_w * fwd_penalty)
         return final, {
-            "ncc_w": ncc_w, "norm_ncc": norm_ncc, "norm_dist": norm_dist,
+            "norm_ncc": norm_ncc, "norm_dist": norm_dist,
             "dir_penalty": dir_penalty, "scale_penalty": scale_penalty,
-            "lat_penalty": lat_penalty, "final_score": final,
+            "lat_penalty": lat_penalty, "forward_speed_penalty": fwd_penalty,
+            "final_score": final, "dy": dy,
         }
 
     def _check_jump(self, new_cx, new_cy, new_w, new_h):
@@ -1103,6 +1118,66 @@ class TraditionalTracker:
             match_cx_orig = match_cx / pre_scale
             match_cy_orig = match_cy / pre_scale
 
+            # --- Scene2 forward/lateral hard gate (delayed enable) ---
+            if use_vehicle_prior and self.last_accepted_center is not None:
+                min_stable = self.cfg.get("scene2_forward_gate_min_stable_frames", 25)
+                gate_enabled = (self.stable_detect_count >= min_stable
+                                and self.lost_count == 0)
+                if gate_enabled:
+                    max_fwd = self.cfg.get("scene2_max_forward_step", 8)
+                    back_tol = self.cfg.get("scene2_backward_tolerance", 4)
+                    max_lat = self.cfg.get("scene2_max_lateral_step", 12)
+                    dy_hard = match_cy_orig - self.last_accepted_center[1]
+                    dx_hard = match_cx_orig - self.last_accepted_center[0]
+                    rejected = False
+                    if dy_hard < -max_fwd:
+                        reason = f"scene2_forward_jump_too_large(dy={dy_hard:.0f}<{-max_fwd})"
+                        rejected = True
+                    elif dy_hard > back_tol:
+                        reason = f"scene2_backward_motion(dy={dy_hard:.0f}>{back_tol})"
+                        rejected = True
+                    elif abs(dx_hard) > max_lat:
+                        reason = f"scene2_lateral_jump_too_large(dx={dx_hard:.0f}>{max_lat})"
+                        rejected = True
+                    if rejected:
+                        reject_history.append(f"rank{rank}:{reason}")
+                        continue
+                dbg["forward_gate_enabled"] = gate_enabled
+                dbg["stable_detect_count"] = self.stable_detect_count
+                dbg["dx"] = (match_cx_orig - self.last_accepted_center[0]) if self.last_accepted_center else _SENTINEL
+
+            # --- Scene2 recovery gate: lost后恢复必须靠近预测位置 ---
+            is_recovery = (use_vehicle_prior
+                           and self.cfg.get("scene2_recovery_gate_enabled", False)
+                           and self.lost_count > 0
+                           and self.last_reliable_center is not None)
+            if is_recovery:
+                rec_max_dx = self.cfg.get("scene2_recovery_max_pred_x_error", 12)
+                rec_max_dy = self.cfg.get("scene2_recovery_max_pred_y_error", 8)
+                rec_max_d = self.cfg.get("scene2_recovery_max_total_distance", 18)
+                rec_dx = match_cx_orig - pred_x
+                rec_dy = match_cy_orig - pred_y
+                rec_dist = math.hypot(rec_dx, rec_dy)
+                dbg["dx_pred"] = int(rec_dx)
+                dbg["dy_pred"] = int(rec_dy)
+                dbg["dist_pred"] = rec_dist
+                dbg["last_reliable_center_x"] = int(self.last_reliable_center[0])
+                dbg["last_reliable_center_y"] = int(self.last_reliable_center[1])
+                dbg["scene2_recovery_gate_enabled"] = True
+                rejected = False
+                if abs(rec_dx) > rec_max_dx:
+                    reason = f"scene2_recovery_x_too_far_from_prediction(dx={rec_dx:.0f}>{rec_max_dx})"
+                    rejected = True
+                elif abs(rec_dy) > rec_max_dy:
+                    reason = f"scene2_recovery_y_too_far_from_prediction(dy={rec_dy:.0f}>{rec_max_dy})"
+                    rejected = True
+                elif rec_dist > rec_max_d:
+                    reason = f"scene2_recovery_too_far_from_prediction(dist={rec_dist:.0f}>{rec_max_d})"
+                    rejected = True
+                if rejected:
+                    reject_history.append(f"rank{rank}:{reason}")
+                    continue
+
             accepted, reason = self._validate_detection_candidate(
                 match_cx, match_cy, cand["w"], cand["h"],
                 cand_score, sp_x, sp_y, pre_scale, source="local"
@@ -1130,7 +1205,11 @@ class TraditionalTracker:
             self.center = (int(up_x), int(up_y))
             self.lost_count = 0
             self.prev_score = score
+            self.stable_detect_count += 1
             self._update_last_accepted(self.bbox, self.center, frame_id, dbg)
+            self.last_reliable_center = self.center
+            self.last_reliable_bbox = self.bbox.copy()
+            self.last_reliable_frame = frame_id
 
             self._record_scale_usage(cand)
 
@@ -1167,7 +1246,10 @@ class TraditionalTracker:
                 dbg["candidate_final_score"] = vd.get("final_score", _SENTINEL)
                 dbg["direction_penalty"] = vd.get("dir_penalty", _SENTINEL)
                 dbg["scale_penalty"] = vd.get("scale_penalty", _SENTINEL)
+                dbg["forward_speed_penalty"] = vd.get("forward_speed_penalty", _SENTINEL)
+                dbg["dy"] = vd.get("dy", _SENTINEL)
             dbg["scene_strategy"] = "vehicle_prior" if use_vehicle_prior else ""
+            dbg["scene2_max_forward_step"] = self.cfg.get("scene2_max_forward_step", _SENTINEL)
 
             out = {
                 "frame_id": frame_id,
@@ -1195,6 +1277,7 @@ class TraditionalTracker:
 
         # --- PREDICTION PATH ---
         self.lost_count += 1
+        self.stable_detect_count = 0  # reset on any lost frame
         orig_w = self.bbox[2]
         orig_h = self.bbox[3]
         orig_frame_w = int(s_img_w / pre_scale) if pre_scale > 0 else s_img_w
@@ -1302,7 +1385,11 @@ class TraditionalTracker:
                 self.kalman = KalmanFilter2D(cx, cy)
                 self.lost_count = 0
                 self.prev_score = fc["score"]
+                self.stable_detect_count += 1
                 self._update_last_accepted(self.bbox, self.center, frame_id, dbg)
+                self.last_reliable_center = self.center
+                self.last_reliable_bbox = self.bbox.copy()
+                self.last_reliable_frame = frame_id
 
                 self._record_scale_usage(fc)
 

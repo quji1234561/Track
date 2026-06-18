@@ -164,63 +164,78 @@ SCENES = {
     "scene2_car": {
         "name": "大疆无人机航拍视频-车辆目标跟踪",         # 场景显示名称
         "video": "document/大疆无人机航拍视频.mp4",        # 视频文件路径
-        "templates": [                                    # 模板列表（注释掉的为备用模板, 需要时取消注释）
+        "templates": [                                    # 模板列表
             "document/scene2_car_template_1.png",
+            # 补充模板: python -m src.template_crop_tool --scene scene2_car --frame 18 --name scene2_car_template_2.png
+            "document/scene2_car_template_2.png",
+            "document/scene2_car_template_3.png",
         ],
         "output_prefix": "scene2_car",                     # 输出文件前缀
         # --- 核心匹配 ---
-        "threshold": 0.42,            # NCC 匹配阈值（降低到 0.45 以适应远距离车辆变小后的低分区域）
-        "search_radius": 40,          # 局部搜索窗口半径(px)（缩小搜索范围, 防止跳到远处其他车辆）
-        "max_lost": 999,               # 连续丢失容忍帧数（提高以减少全图重搜索, 避免匹配到其他车）
-        "multi_scale": [0.7,0.85,0.95,1.0],  # 多尺度（0.70~1.10 覆盖车辆从近到远的尺度变化）
-        "start_frame": 0,             # 起始帧号（从第0帧开始, 配合 init_confirmation 防止误初始化）
-        "use_integral_ncc": True,     # 积分图加速 NCC
-        "max_motion_distance": 60,    # 允许离预测点的最大距离(px)（车辆帧间移动有限）
-        "ncc_step": 1,                # 滑窗步长（模板小~76px, 用较细步长保证精度）
-        "resize_scale": 1.0,          # 帧缩放（640×512 已够小, 无需缩放）
+        "threshold": 0.36,            # 降低阈值，让候选能先进来再筛选
+        "search_radius": 70,          # 扩大搜索范围（车辆在帧20附近位置变化大）
+        "max_lost": 8,                # 恢复策略：丢8帧就全图重搜索
+        "multi_scale": [0.55,0.65,0.75,0.85,0.95,1.0],  # 更宽尺度范围适应车辆快速变小
+        "start_frame": 0,
+        "use_integral_ncc": True,
+        "max_motion_distance": 90,    # 放宽距离容忍
+        "ncc_step": 2,                # 步长2平衡速度精度
+        "resize_scale": 1.0,
         # --- 可视化 ---
-        "show_predicted_bbox": False,           # 显示预测黄框（卡尔曼漂移时参考用）
-        "draw_predicted_trajectory": False,     # 预测点不参与轨迹（避免污染运动轨迹）
+        "show_predicted_bbox": False,
+        "draw_predicted_trajectory": False,
         # --- 初始化连续确认 ---
-        "enable_init_confirmation": True,      # 启用连续确认（防止初始锁到车道旁的反向车辆）
-        "init_confirm_frames": 2,              # 需连续 4 帧确认（比默认 3 更严格）
-        "init_confirm_min_score": 0.55,        # 确认期间最低 NCC 分数（提高门槛, 防止低分误初始化）
-        "init_confirm_max_distance": 40,       # 确认期间最大帧间位移(px)
+        "enable_init_confirmation": True,
+        "init_confirm_frames": 2,
+        "init_confirm_min_score": 0.55,
+        "init_confirm_max_distance": 40,
         # --- 运动方向约束 ---
-        "enable_motion_direction": True,       # 启用方向约束（车从画面下方驶向远处, y 应持续减小）
-        "motion_direction_y": -1,              # -1=只能向上移动（y 减小）
-        "motion_direction_tolerance": 8,      # 逆向容差(px)（允许偶尔帧间 y 微增 15px 以内）
+        "enable_motion_direction": True,
+        "motion_direction_y": -1,              # 车向上移动(y减小)
+        "motion_direction_tolerance": 8,
         # --- 跳变检测 ---
-        "enable_jump_detection": True,         # 启用跳变检测（防止检测框跳到其他车道车辆）
-        "jump_max_distance": 35,               # 最大帧间位移(px)（车辆帧间移动有限, 超过 50px 视为跳变）
-        "jump_max_area_change": 0,           # 最大面积变化倍数（尺度突变 >3x 视为跳变）
+        "enable_jump_detection": True,
+        "jump_max_distance": 55,               # 放宽跳变限制
+        "jump_max_area_change": 0,
         # --- y 前进速度限制 ---
-        "enable_y_forward_speed_limit": True,        # 启用 y 前进速度限制
-        "max_y_decrease_per_frame": 18,              # y 最多减少像素（防止向上冲太快）
-        "max_candidate_ahead_of_prediction_y": 18,   # 候选最多比预测超前像素
-        "max_candidate_behind_prediction_y": 20,     # 候选最多比预测落后像素（拒绝静止误匹配）
+        "enable_y_forward_speed_limit": False,  # 关闭，防止误拒绝真实车辆候选
+        "max_y_decrease_per_frame": 18,
+        "max_candidate_ahead_of_prediction_y": 18,
+        "max_candidate_behind_prediction_y": 20,
         # --- Top-K 候选筛选 ---
-        "enable_topk_candidate_selection": True,     # 启用 Top-K 候选逐个检查
-        "topk_candidates": 12,                        # 前 8 个空间候选参与筛选
-        "topk_min_score": 0.36,                      # 候选最低分数门槛
+        "enable_topk_candidate_selection": True,
+        "topk_candidates": 12,
+        "topk_min_score": 0.28,                 # 降低候选门槛
         # --- 预测约束 ---
-        "constrain_predictions": True,               # 预测框也受方向/跳变/尺寸限制
-        "prediction_max_center_jump": 45,             # 预测框帧间最大位移(px)
-        "prediction_max_y_reverse": 5,                # 预测框 y 方向最大逆向位移(px)（车不应倒退）
-        "prediction_max_area_change_ratio": 1.5,      # 预测框面积变化上限
-        "prediction_max_width_change_ratio": 1.5,     # 预测框宽度变化上限
-        "prediction_max_height_change_ratio": 1.5,    # 预测框高度变化上限
-        "prediction_out_of_bounds_policy": "reject",  # 预测出界策略: 拒绝
-        "prediction_reject_adds_lost": True,          # 预测被拒也计入连续丢失
+        "constrain_predictions": True,
+        "prediction_max_center_jump": 45,
+        "prediction_max_y_reverse": 5,
+        "prediction_max_area_change_ratio": 1.5,
+        "prediction_max_width_change_ratio": 1.5,
+        "prediction_max_height_change_ratio": 1.5,
+        "prediction_out_of_bounds_policy": "reject",
+        "prediction_reject_adds_lost": True,
         # --- 车辆运动先验 ---
-        "scene2_use_vehicle_prior": True,             # 启用车辆专用候选加权评分
-        "scene2_candidate_topk": 20,                  # 参与加权评分的Top-K候选数
-        "scene2_max_lateral_shift": 25,               # 最大横向偏移(px)
-        "scene2_direction_penalty_weight": 0.15,      # 方向惩罚权重
-        "scene2_distance_penalty_weight": 0.20,       # 距离惩罚权重
-        "scene2_scale_penalty_weight": 0.10,          # 尺度惩罚权重
-        "scene2_ncc_weight": 0.55,                    # NCC分数权重
-        "scene2_scale_should_decrease": True,         # 目标尺度应逐渐减小
+        "scene2_use_vehicle_prior": True,
+        "scene2_candidate_topk": 20,
+        "scene2_max_lateral_shift": 25,
+        "scene2_direction_penalty_weight": 0.15,
+        "scene2_distance_penalty_weight": 0.20,
+        "scene2_scale_penalty_weight": 0.10,
+        "scene2_forward_speed_penalty_weight": 0.20,
+        "scene2_ncc_weight": 0.50,
+        "scene2_scale_should_decrease": True,
+        # 前向/横向硬门控（延迟启用，只在稳定跟踪 N 帧后才激活）
+        "scene2_forward_gate_min_stable_frames": 25,    # 连续 detected 25帧后才启用
+        "scene2_max_forward_step": 8,                   # 每帧最多向前(y减小)8px
+        "scene2_backward_tolerance": 4,                 # 每帧最多后退(y增大)4px
+        "scene2_max_lateral_step": 12,                  # 每帧最多横向12px
+        "scene2_relaxed_forward_step_when_lost": 15,    # 丢失后放宽到15px
+        # 恢复阶段门控（防止 lost 后锁到前方错误目标）
+        "scene2_recovery_gate_enabled": True,             # lost 后恢复时启用空间门控
+        "scene2_recovery_max_pred_y_error": 8,            # 候选与预测 y 最大偏差(px)
+        "scene2_recovery_max_pred_x_error": 12,           # 候选与预测 x 最大偏差(px)
+        "scene2_recovery_max_total_distance": 18,         # 候选与预测最大总距离(px)
     },
 
     # =========================================================================
