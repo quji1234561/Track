@@ -244,6 +244,7 @@ SCENES = {
         "scene2_recovery_max_ahead_y": 6,                 # 恢复候选不能超前预测太多(px)
         "scene2_recovery_min_score": 0.36,                # 恢复阶段降低分数门槛
         "scene2_draw_prediction_during_occlusion": True,  # 遮挡期间是否显示预测框
+        "scene2_max_recovery_frames": 40,                 # 恢复最大尝试帧数,超时→RECOVERY_FAILED
         # 全局运动补偿（抵消航拍相机运动）
         "scene2_use_global_motion_compensation": True,     # 启用全局运动补偿
         "scene2_gmc_max_corners": 300,                     # 角点最大数量

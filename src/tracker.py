@@ -140,9 +140,11 @@ class TraditionalTracker:
         self.reliable_history = []          # [(frame_id, cx, cy, w, h), ...] last ~20
 
         # --- Scene2 occlusion state machine ---
-        self.scene2_state = "TRACKING"       # TRACKING / OCCLUDED / RECOVERY
+        self.scene2_state = "TRACKING"       # TRACKING / OCCLUDED / RECOVERY / RECOVERY_FAILED
         self.scene2_occlusion_count = 0
         self.scene2_recovery_confirm_count = 0
+        self.scene2_recovery_frame_count = 0  # total frames in RECOVERY
+        self.scene2_post_occlusion_lock = False
 
         # --- GMC (global motion compensation) state ---
         self.prev_gray_for_gmc = None
@@ -985,15 +987,20 @@ class TraditionalTracker:
             if occ_start <= frame_id <= occ_end:
                 self.scene2_state = "OCCLUDED"
                 self.scene2_occlusion_count = frame_id - occ_start + 1
+                self.scene2_post_occlusion_lock = True
                 if self.scene2_occlusion_count > max_predict:
                     self.scene2_state = "OCCLUDED"  # stay occluded, max reached
             elif frame_id > occ_end and self.scene2_state in ("OCCLUDED", "RECOVERY"):
                 if self.scene2_state == "OCCLUDED":
                     self.scene2_state = "RECOVERY"
                     self.scene2_recovery_confirm_count = 0
+                    self.scene2_recovery_frame_count = 0
+                else:
+                    self.scene2_recovery_frame_count += 1
             elif frame_id < occ_start:
                 self.scene2_state = "TRACKING"
                 self.scene2_last_comp_pred = None
+                self.scene2_post_occlusion_lock = False
 
         # --- Handle OCCLUDED state ---
         if self.scene2_state == "OCCLUDED":
@@ -1423,7 +1430,9 @@ class TraditionalTracker:
                         # Confirmed — switch to TRACKING
                         self.scene2_state = "TRACKING"
                         self.scene2_recovery_confirm_count = 0
+                        self.scene2_recovery_frame_count = 0
                         self.scene2_last_comp_pred = None
+                        self.scene2_post_occlusion_lock = False
 
             # --- ACCEPT (only if still valid after RECOVERY checks) ---
             if accepted_candidate is None:
@@ -1434,6 +1443,38 @@ class TraditionalTracker:
             else:
                 # fall through to accept logic below
                 pass
+
+        # --- Scene2 post-occlusion lock: block normal accept ---
+        is_post_occ = (self.scene2_post_occlusion_lock
+                       and self.scene2_state not in ("OCCLUDED",))
+        if is_post_occ and accepted_candidate is not None:
+            # Only allow accept through RECOVERY confirmation path.
+            # Normal accept is blocked — force prediction instead.
+            dbg["reject_reason"] = "scene2_post_occlusion_lock_active"
+            dbg["scene2_post_occlusion_lock"] = True
+            dbg["scene2_state"] = self.scene2_state
+            accepted_candidate = None
+
+        # --- Scene2 RECOVERY max duration check ---
+        if (self.scene2_state == "RECOVERY"
+                and self.scene2_recovery_frame_count >= self.cfg.get("scene2_max_recovery_frames", 40)):
+            self.scene2_state = "RECOVERY_FAILED"
+            dbg["reject_reason"] = "scene2_recovery_failed_keep_hidden"
+        if self.scene2_state == "RECOVERY_FAILED":
+            dbg["detected"] = False
+            dbg["predicted"] = True
+            dbg["lost"] = False
+            dbg["scene2_state"] = "RECOVERY_FAILED"
+            dbg["reject_reason"] = dbg.get("reject_reason") or "scene2_recovery_failed_keep_hidden"
+            dbg["used_for_trajectory"] = False
+            dbg["center_x"] = int(self.center[0]) if self.center else 0
+            dbg["center_y"] = int(self.center[1]) if self.center else 0
+            out = {"frame_id": frame_id, "bbox": self.bbox.copy() if self.bbox else [0,0,0,0],
+                   "center": self.center if self.center else (0,0),
+                   "score": -1.0, "detected": False, "predicted": True,
+                   "template_id": _SENTINEL}
+            out.update(dbg)
+            return out
 
         if accepted_candidate is not None:
             # --- ACCEPT ---
@@ -1514,6 +1555,8 @@ class TraditionalTracker:
                 dbg["forward_speed_penalty"] = vd.get("forward_speed_penalty", _SENTINEL)
                 dbg["dy"] = vd.get("dy", _SENTINEL)
             dbg["scene2_state"] = self.scene2_state
+            dbg["scene2_post_occlusion_lock"] = self.scene2_post_occlusion_lock
+            dbg["scene2_recovery_frame_count"] = self.scene2_recovery_frame_count
             dbg["scene_strategy"] = "vehicle_prior" if use_vehicle_prior else ""
             dbg["scene2_max_forward_step"] = self.cfg.get("scene2_max_forward_step", _SENTINEL)
 
