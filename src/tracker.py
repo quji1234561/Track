@@ -149,7 +149,8 @@ class TraditionalTracker:
         self.last_global_affine = None
         self.gmc_residual_vx = 0.0
         self.gmc_residual_vy = 0.0
-        self.gmc_residual_history = []  # list of (dx, dy) from last 20 reliable frames
+        self.gmc_residual_history = []         # list of (dx, dy) from last 20 reliable frames
+        self.scene2_last_comp_pred = None       # iterative prediction during occlusion
 
         # --- Init confirmation state ---
         self._init_pending = False
@@ -904,6 +905,23 @@ class TraditionalTracker:
         scaled_frame, pre_scale = self._pre_scale_frame(gray_frame)
         s_img_h, s_img_w = scaled_frame.shape
 
+        # --- GMC: estimate global affine EVERY frame (not just on accept) ---
+        use_gmc_global = (self.cfg.get("scene2_use_global_motion_compensation", False)
+                          and _HAS_GMC)
+        if use_gmc_global and self.prev_gray_for_gmc is not None:
+            gmc_exclude = self.bbox if self.bbox and self.bbox[2] > 0 and self.bbox[3] > 0 else None
+            A_new, n_inliers = estimate_global_affine(
+                self.prev_gray_for_gmc, scaled_frame,
+                exclude_bbox=gmc_exclude, cfg=self.cfg)
+            dbg["gmc_inlier_count"] = n_inliers
+            if A_new is not None:
+                self.last_global_affine = A_new
+                dbg["gmc_valid"] = True
+            else:
+                dbg["gmc_valid"] = False
+        else:
+            dbg["gmc_valid"] = False
+
         # --- Scene3 exit detection ---
         if self.cfg.get("scene3_stop_after_exit", False) and self.center is not None:
             exit_y = self.cfg.get("scene3_exit_y", 500)
@@ -975,6 +993,7 @@ class TraditionalTracker:
                     self.scene2_recovery_confirm_count = 0
             elif frame_id < occ_start:
                 self.scene2_state = "TRACKING"
+                self.scene2_last_comp_pred = None
 
         # --- Handle OCCLUDED state ---
         if self.scene2_state == "OCCLUDED":
@@ -988,10 +1007,16 @@ class TraditionalTracker:
             gmc_ok = False
             comp_cx, comp_cy = kf_cx, kf_cy
             if use_gmc and self.last_global_affine is not None and self.last_reliable_center:
-                lr_cx, lr_cy = self.last_reliable_center
-                bg_x, bg_y = apply_affine(self.last_global_affine, lr_cx, lr_cy)
+                # Iterative: start from last reliable on first occlusion frame,
+                # then project the previous compensated prediction forward.
+                if self.scene2_last_comp_pred is not None:
+                    base_x, base_y = self.scene2_last_comp_pred
+                else:
+                    base_x, base_y = self.last_reliable_center
+                bg_x, bg_y = apply_affine(self.last_global_affine, base_x, base_y)
                 comp_cx = bg_x + self.gmc_residual_vx
                 comp_cy = bg_y + self.gmc_residual_vy
+                self.scene2_last_comp_pred = (comp_cx, comp_cy)
                 gmc_ok = True
                 dbg["gmc_valid"] = True
                 dbg["comp_pred_x"] = int(comp_cx)
@@ -1047,6 +1072,20 @@ class TraditionalTracker:
         pred_x, pred_y = self.kalman.predict()
         dbg["predicted_x"] = int(pred_x)
         dbg["predicted_y"] = int(pred_y)
+
+        # --- Use GMC compensated prediction for search center in RECOVERY ---
+        if (self.scene2_state in ("RECOVERY",)
+                and use_gmc_global and self.last_global_affine is not None
+                and self.last_reliable_center is not None):
+            if self.scene2_last_comp_pred is not None:
+                base_x, base_y = self.scene2_last_comp_pred
+            else:
+                base_x, base_y = self.last_reliable_center
+            bg_rx, bg_ry = apply_affine(self.last_global_affine, base_x, base_y)
+            gmc_pred_x = bg_rx + self.gmc_residual_vx
+            gmc_pred_y = bg_ry + self.gmc_residual_vy
+            pred_x = 0.5 * pred_x + 0.5 * gmc_pred_x
+            pred_y = 0.5 * pred_y + 0.5 * gmc_pred_y
 
         sp_x = pred_x * pre_scale
         sp_y = pred_y * pre_scale
@@ -1370,6 +1409,7 @@ class TraditionalTracker:
                         # Confirmed — switch to TRACKING
                         self.scene2_state = "TRACKING"
                         self.scene2_recovery_confirm_count = 0
+                        self.scene2_last_comp_pred = None
 
             # --- ACCEPT ---
             cand = accepted_candidate
@@ -1392,34 +1432,23 @@ class TraditionalTracker:
             if len(self.reliable_history) > 20:
                 self.reliable_history.pop(0)
 
-            # GMC: estimate affine from prev_gray to current, compute residual
-            use_gmc2 = (self.cfg.get("scene2_use_global_motion_compensation", False)
-                        and _HAS_GMC)
-            if use_gmc2 and self.prev_gray_for_gmc is not None:
-                A, n_in = estimate_global_affine(
-                    self.prev_gray_for_gmc, scaled_frame,
-                    exclude_bbox=self.bbox,
-                    cfg=self.cfg)
-                dbg["gmc_valid"] = (A is not None)
-                dbg["gmc_inlier_count"] = n_in
-                if A is not None:
-                    self.last_global_affine = A
-                    # Compute residual: actual_center - background_mapped_prev_center
-                    if self.last_reliable_center is not None and len(self.reliable_history) >= 2:
-                        prev_cx2, prev_cy2 = self.reliable_history[-2][1], self.reliable_history[-2][2]
-                        bgx, bgy = apply_affine(A, prev_cx2, prev_cy2)
-                        rx = self.center[0] - bgx
-                        ry = self.center[1] - bgy
-                        self.gmc_residual_history.append((rx, ry))
-                        if len(self.gmc_residual_history) > 20:
-                            self.gmc_residual_history.pop(0)
-                        if len(self.gmc_residual_history) >= 3:
-                            rxs = sorted([r[0] for r in self.gmc_residual_history])
-                            rys = sorted([r[1] for r in self.gmc_residual_history])
-                            self.gmc_residual_vx = rxs[len(rxs)//2]
-                            self.gmc_residual_vy = rys[len(rys)//2]
-                    dbg["residual_vx"] = self.gmc_residual_vx
-                    dbg["residual_vy"] = self.gmc_residual_vy
+            # GMC residual update: compare actual vs background-mapped prev center
+            if use_gmc_global and self.last_global_affine is not None:
+                if self.last_reliable_center is not None and len(self.reliable_history) >= 2:
+                    prev_cx2, prev_cy2 = self.reliable_history[-2][1], self.reliable_history[-2][2]
+                    bgx, bgy = apply_affine(self.last_global_affine, prev_cx2, prev_cy2)
+                    rx = self.center[0] - bgx
+                    ry = self.center[1] - bgy
+                    self.gmc_residual_history.append((rx, ry))
+                    if len(self.gmc_residual_history) > 20:
+                        self.gmc_residual_history.pop(0)
+                    if len(self.gmc_residual_history) >= 3:
+                        rxs = sorted([r[0] for r in self.gmc_residual_history])
+                        rys = sorted([r[1] for r in self.gmc_residual_history])
+                        self.gmc_residual_vx = rxs[len(rxs)//2]
+                        self.gmc_residual_vy = rys[len(rys)//2]
+                dbg["residual_vx"] = self.gmc_residual_vx
+                dbg["residual_vy"] = self.gmc_residual_vy
 
             self._record_scale_usage(cand)
 
@@ -1473,6 +1502,8 @@ class TraditionalTracker:
                 "template_id": cand.get("template_id", _SENTINEL),
             }
             out.update(dbg)
+            if _HAS_GMC:
+                self.prev_gray_for_gmc = scaled_frame.copy()
             return out
 
         # All candidates rejected
