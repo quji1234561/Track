@@ -1311,7 +1311,7 @@ class TraditionalTracker:
             # --- Scene2 recovery gate: lost后恢复必须靠近预测位置 ---
             is_recovery = (use_vehicle_prior
                            and self.cfg.get("scene2_recovery_gate_enabled", False)
-                           and self.lost_count > 0
+                           and (self.lost_count > 0 or self.scene2_state == "RECOVERY")
                            and self.last_reliable_center is not None)
             if is_recovery:
                 rec_max_dx = self.cfg.get("scene2_recovery_max_pred_x_error", 12)
