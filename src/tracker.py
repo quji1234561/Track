@@ -1240,15 +1240,28 @@ class TraditionalTracker:
             scored.sort(key=lambda x: x[0], reverse=True)
             topk_candidates = [c for _, c in scored]
 
+        # --- Filter None/invalid candidates ---
+        safe_candidates = []
+        for cand in (topk_candidates or []):
+            if cand is None or not isinstance(cand, dict):
+                continue
+            if "score" not in cand and "final_score" not in cand:
+                continue
+            safe_candidates.append(cand)
+        topk_candidates = safe_candidates
+
         # --- Loop through top-K candidates ---
         accepted_candidate = None
         reject_history = []
         topk_min_score = self.cfg.get("topk_min_score", 0.0)
 
         for rank, cand in enumerate(topk_candidates or [], start=1):
-            if cand is None:
+            if cand is None or not isinstance(cand, dict):
+                reject_history.append("candidate_none")
                 continue
-            cand_score = cand.get("score", -1.0)
+            cand_score = cand.get("score", cand.get("final_score", -1.0))
+            if cand_score is None:
+                cand_score = -1.0
             if cand_score < topk_min_score:
                 reject_history.append(f"rank{rank}:score_below_topk_min")
                 continue
@@ -1384,6 +1397,7 @@ class TraditionalTracker:
 
                 if rejected:
                     accepted_candidate = None
+                    # Falls through to ACCEPT guard which checks for None
                 else:
                     self.scene2_recovery_confirm_count += 1
                     conf_frames = self.cfg.get("scene2_recovery_confirm_frames", 3)
@@ -1411,6 +1425,17 @@ class TraditionalTracker:
                         self.scene2_recovery_confirm_count = 0
                         self.scene2_last_comp_pred = None
 
+            # --- ACCEPT (only if still valid after RECOVERY checks) ---
+            if accepted_candidate is None:
+                # RECOVERY rejected — skip accept, go to next candidate or prediction
+                reject_history.append("rankNA:recovery_rejected_candidate_none")
+                # continue the outer Top-K loop — use a flag
+                pass
+            else:
+                # fall through to accept logic below
+                pass
+
+        if accepted_candidate is not None:
             # --- ACCEPT ---
             cand = accepted_candidate
             score = cand["score"]
