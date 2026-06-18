@@ -1,2 +1,2 @@
 scene,total_frames,detected_frames,predicted_frames,lost_frames,detection_rate,prediction_rate,average_score,average_fps
-大疆无人机航拍视频-车辆目标跟踪,130,88,18,24,0.676923076923077,0.13846153846153847,0.7242780169501788,0.489996161408785
+大疆无人机航拍视频-车辆目标跟踪,130,88,18,24,0.676923076923077,0.13846153846153847,0.7242780169501788,0.5567169582014762

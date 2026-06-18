@@ -1404,6 +1404,7 @@ class TraditionalTracker:
 
                 if rejected:
                     accepted_candidate = None
+                    self.scene2_recovery_confirm_count = 0
                     # Falls through to ACCEPT guard which checks for None
                 else:
                     self.scene2_recovery_confirm_count += 1
@@ -1454,6 +1455,7 @@ class TraditionalTracker:
             dbg["scene2_post_occlusion_lock"] = True
             dbg["scene2_state"] = self.scene2_state
             accepted_candidate = None
+            self.scene2_recovery_confirm_count = 0
 
         # --- Scene2 RECOVERY max duration check ---
         if (self.scene2_state == "RECOVERY"

@@ -83,6 +83,8 @@ DEBUG_CSV_FIELDS = [
     "affine_a10", "affine_a11", "affine_a12",
     # candidate raw position
     "candidate_x", "candidate_y",
+    # scene2 recovery lock
+    "scene2_post_occlusion_lock", "scene2_recovery_frame_count",
 ]
 
 # Per-scale score CSV fields — one row per candidate template per frame
