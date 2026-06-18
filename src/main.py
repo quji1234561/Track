@@ -457,6 +457,12 @@ def run_scene(scene_key, args):
                 merged_path = OUTPUT_SUBDIRS["trajectories"] / f"{prefix}_merged.csv"
                 save_trajectory_csv(results, str(merged_path))
                 print(f"Merged trajectory saved: {merged_path}")
+                # Auto-render merged video from frame 0
+                try:
+                    from .scene3_render_merged import run_render
+                    run_render(scene_key, max_frames or 0)
+                except Exception as e:
+                    print(f"  Merged render skipped: {e}")
         else:
             print("  Backward fill skipped: no valid anchor bbox")
 
