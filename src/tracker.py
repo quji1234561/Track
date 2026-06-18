@@ -252,6 +252,36 @@ class TraditionalTracker:
             scaled.append((small_t.astype(np.float32), sc, tid))
         return scaled
 
+    def _normalize_candidate(self, cand):
+        """Normalize any candidate dict to standard schema: x,y,w,h,bbox,score,center_x/y."""
+        if cand is None or not isinstance(cand, dict):
+            return None
+        out = dict(cand)
+        x = out.get("x", out.get("bbox_x", out.get("match_x", None)))
+        y = out.get("y", out.get("bbox_y", out.get("match_y", None)))
+        w = out.get("w", out.get("bbox_w", out.get("match_w", None)))
+        h = out.get("h", out.get("bbox_h", out.get("match_h", None)))
+        if (x is None or y is None) and w is not None and h is not None:
+            cx = out.get("center_x", out.get("cx", None))
+            cy = out.get("center_y", out.get("cy", None))
+            if cx is not None and cy is not None:
+                x, y = int(cx - w//2), int(cy - h//2)
+        if x is None or y is None or w is None or h is None:
+            return None
+        x, y, w, h = int(x), int(y), int(w), int(h)
+        if w <= 0 or h <= 0:
+            return None
+        score = out.get("score", out.get("final_score", out.get("motion_score", -1.0)))
+        if score is None:
+            score = -1.0
+        out["x"], out["y"], out["w"], out["h"] = x, y, w, h
+        out["bbox"] = [x, y, w, h]
+        out["match_x"], out["match_y"], out["match_w"], out["match_h"] = x, y, w, h
+        out["center_x"], out["center_y"] = int(x + w//2), int(y + h//2)
+        out["score"] = float(score)
+        out["final_score"] = float(out.get("final_score", score))
+        return out
+
     def _record_scale_usage(self, result):
         if result is None:
             return
@@ -945,7 +975,7 @@ class TraditionalTracker:
                 if best_cand and best_score >= self.cfg.get("scene3_motion_init_min_score", 0.55):
                     bc = best_cand
                     self.scene3_motion_tracklet.append(
-                        (frame_id, bc["cx"], bc["cy"], bc["w"], bc["h"], best_score))
+                        (frame_id, bc["center_x"], bc["center_y"], bc["w"], bc["h"], best_score))
                     if len(self.scene3_motion_tracklet) > 20:
                         self.scene3_motion_tracklet.pop(0)
 
@@ -964,9 +994,9 @@ class TraditionalTracker:
                         self.scene3_motion_init_confirm = 0
 
                     dbg["scene3_init_confirm_count"] = self.scene3_motion_init_confirm
-                    dbg["motion_score"] = bc.get("motion_score", 0)
-                    dbg["shape_score"] = bc.get("shape_score", 0)
-                    dbg["direction_score"] = bc.get("direction_score", 0)
+                    dbg["motion_score"] = best_cand.get("motion_score", 0)
+                    dbg["shape_score"] = best_cand.get("shape_score", 0)
+                    dbg["direction_score"] = best_cand.get("direction_score", 0)
                     dbg["final_score"] = best_score
 
                     if self.scene3_motion_init_confirm >= min_confirm:
@@ -1345,10 +1375,24 @@ class TraditionalTracker:
             max_motion = max(50 * pre_scale, search_radius * 0.75)
         dbg["max_motion_used"] = max_motion
 
-        dbg["topk_candidates_count"] = len(topk_candidates) if topk_candidates else 0
-        dbg["best_raw_score"] = topk_candidates[0]["score"] if topk_candidates else _SENTINEL
-        dbg["best_raw_center_x"] = (topk_candidates[0]["x"] + topk_candidates[0]["w"] // 2) if topk_candidates else _SENTINEL
-        dbg["best_raw_center_y"] = (topk_candidates[0]["y"] + topk_candidates[0]["h"] // 2) if topk_candidates else _SENTINEL
+        # Normalize all candidates
+        norm_topk = []
+        for c in (topk_candidates or []):
+            nc = self._normalize_candidate(c)
+            if nc is not None:
+                norm_topk.append(nc)
+        topk_candidates = norm_topk
+
+        dbg["topk_candidates_count"] = len(topk_candidates)
+        if topk_candidates:
+            br = topk_candidates[0]
+            dbg["best_raw_score"] = br.get("score", _SENTINEL)
+            dbg["best_raw_center_x"] = br.get("center_x", _SENTINEL)
+            dbg["best_raw_center_y"] = br.get("center_y", _SENTINEL)
+        else:
+            dbg["best_raw_score"] = _SENTINEL
+            dbg["best_raw_center_x"] = _SENTINEL
+            dbg["best_raw_center_y"] = _SENTINEL
 
         # --- Scene2 vehicle prior: re-score candidates ---
         use_vehicle_prior = self.cfg.get("scene2_use_vehicle_prior", False)

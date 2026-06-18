@@ -156,8 +156,15 @@ def extract_motion_candidates(diff, cfg):
         motion_score = float(roi_diff.mean()) if roi_diff.size > 0 else 0.0
         candidates.append({
             "x": int(x), "y": int(y), "w": int(w), "h": int(h),
-            "area": int(area), "cx": float(cx), "cy": float(cy),
+            "bbox": [int(x), int(y), int(w), int(h)],
+            "match_x": int(x), "match_y": int(y), "match_w": int(w), "match_h": int(h),
+            "center_x": float(cx), "center_y": float(cy),
+            "cx": float(cx), "cy": float(cy),
+            "area": int(area),
             "motion_score": motion_score,
+            "score": motion_score,
+            "final_score": motion_score,
+            "source": "scene3_motion",
         })
 
     # Sort by motion_score descending
