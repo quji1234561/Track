@@ -153,9 +153,7 @@ class Scene4FrameDiffTracker:
         pred_cx, pred_cy = None, None
         pred_gate = self.cfg.get("scene4_prediction_gate", 120)
         if self.kalman is not None:
-            pred_cx, pred_cy = self.kalman.predict()
-            pred_cx /= rs
-            pred_cy /= rs
+            pred_cx, pred_cy = self.kalman.predict()  # already in original coords
 
         # Score and filter candidates
         scored = []
@@ -171,7 +169,9 @@ class Scene4FrameDiffTracker:
 
             # Prediction score
             if pred_cx is not None:
-                dist = np.sqrt((c["center_x"] / rs - pred_cx) ** 2 + (c["center_y"] / rs - pred_cy) ** 2)
+                # candidate is in scaled coords, Kalman in original → divide by rs to compare
+                dist = np.sqrt((c["center_x"] / rs - pred_cx) ** 2
+                               + (c["center_y"] / rs - pred_cy) ** 2)
                 pred_s = max(0.0, 1.0 - dist / pred_gate) if pred_gate > 0 else 0.5
             else:
                 pred_s = 0.5
@@ -222,6 +222,7 @@ class Scene4FrameDiffTracker:
 
                 out = {"frame_id": frame_id, "bbox": self.bbox, "center": self.center,
                        "score": best["score"], "detected": True, "predicted": False,
+                       "lost": False, "used_for_trajectory": True,
                        "template_id": _SENTINEL}
                 out.update(dbg)
                 self._shift_frames(sf)
@@ -236,34 +237,38 @@ class Scene4FrameDiffTracker:
 
         if self.lost_count > max_lost or not self.initialized:
             self.scene4_state = "LOST"
-            dbg["reject_reason"] = dbg.get("reject_reason") or "scene4_lost_too_long" if self.lost_count > max_lost else "scene4_no_motion_candidate"
+            dbg["reject_reason"] = dbg.get("reject_reason") or (
+                "scene4_lost_too_long" if self.lost_count > max_lost
+                else "scene4_no_motion_candidate")
             dbg["scene4_state"] = "LOST"
-            out = {"frame_id": frame_id, "bbox": [0, 0, 0, 0], "center": (0, 0),
+            out = {"frame_id": frame_id, "bbox": None, "center": None,
                    "score": -1.0, "detected": False, "predicted": False,
+                   "lost": True, "used_for_trajectory": False,
                    "template_id": _SENTINEL}
             out.update(dbg)
             self._shift_frames(sf)
             return out
 
-        # Kalman prediction
+        # Kalman prediction (Kalman operates in original coords, no /rs needed)
         if self.kalman is not None:
-            kx, ky = self.kalman.predict()
-            kx_o, ky_o = int(kx / rs), int(ky / rs)
+            kx, ky = self.kalman.predict()  # original coords
             if self.bbox is not None:
                 pw, ph = self.bbox[2], self.bbox[3]
-                pb = [kx_o - pw // 2, ky_o - ph // 2, pw, ph]
-                self.center = (kx_o, ky_o)
+                pb = [int(kx - pw // 2), int(ky - ph // 2), pw, ph]
+                self.center = (int(kx), int(ky))
                 self.bbox = pb
             self.scene4_state = "PREDICTING"
             dbg["reject_reason"] = dbg.get("reject_reason") or "scene4_kalman_prediction"
             dbg["scene4_state"] = "PREDICTING"
             out = {"frame_id": frame_id, "bbox": self.bbox, "center": self.center,
                    "score": -1.0, "detected": False, "predicted": True,
-                   "used_for_trajectory": True, "template_id": _SENTINEL}
+                   "lost": False, "used_for_trajectory": True,
+                   "template_id": _SENTINEL}
             out.update(dbg)
         else:
-            out = {"frame_id": frame_id, "bbox": [0, 0, 0, 0], "center": (0, 0),
+            out = {"frame_id": frame_id, "bbox": None, "center": None,
                    "score": -1.0, "detected": False, "predicted": False,
+                   "lost": False, "used_for_trajectory": False,
                    "template_id": _SENTINEL}
             out.update(dbg)
 
@@ -276,7 +281,8 @@ class Scene4FrameDiffTracker:
 
     def _result(self, frame_id, bbox, reason, state):
         return {"frame_id": frame_id,
-                "bbox": bbox or [0, 0, 0, 0], "center": (0, 0),
+                "bbox": bbox, "center": None,
                 "score": -1.0, "detected": False, "predicted": False,
+                "lost": False, "used_for_trajectory": False,
                 "template_id": _SENTINEL,
                 "reject_reason": reason, "scene4_state": state}

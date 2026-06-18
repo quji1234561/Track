@@ -93,6 +93,12 @@ DEBUG_CSV_FIELDS = [
     "candidate_x", "candidate_y",
     # scene2 recovery lock
     "scene2_post_occlusion_lock", "scene2_recovery_frame_count",
+    # scene4 frame-diff tracker
+    "scene4_state", "scene4_candidate_count",
+    "scene4_best_score", "scene4_motion_score",
+    "scene4_area_score", "scene4_prediction_score",
+    "scene4_contrast_score", "scene4_lost_count",
+    "lost",
 ]
 
 # Per-scale score CSV fields — one row per candidate template per frame
@@ -106,6 +112,19 @@ SCALE_SCORE_FIELDS = [
 
 DEBUG_DIR = OUTPUT_SUBDIRS.get("logs", Path("outputs/logs")).parent / "debug"
 
+
+def _safe_center_str(r):
+    """Safe center string for debug printing."""
+    c = r.get("center", None)
+    if c is not None and isinstance(c, (list, tuple)) and len(c) >= 2:
+        return f"({c[0]}, {c[1]})"
+    return "(None, None)"
+
+def _safe_center(c):
+    """Return (cx,cy) or (0,0) for trajectory/tool use."""
+    if c is not None and isinstance(c, (list, tuple)) and len(c) >= 2:
+        return (int(c[0]), int(c[1]))
+    return None
 
 def _debug_row(result, frame_id):
     """Extract debug fields from a tracker result dict, filling missing with ''."""
@@ -227,14 +246,16 @@ def run_scene(scene_key, args):
 
     init_result["frame_id"] = frame_id
     results.append(init_result)
-    if init_used and init_result.get("center") is not None:
-        trajectory.append(init_result["center"])
+    if init_used:
+        sc = _safe_center(init_result.get("center"))
+        if sc is not None:
+            trajectory.append(sc)
     debug_rows.append(_debug_row(init_result, frame_id))
 
     if debug:
         r = init_result
         print(f"Frame {frame_id:05d}: score={r.get('final_score', r['score']):.4f}, "
-              f"center=({r['center'][0]}, {r['center'][1]}), "
+              f"center={_safe_center_str(r)}, "
               f"detected={r['detected']}, "
               f"reject={r.get('reject_reason', '')}")
 
@@ -332,13 +353,15 @@ def run_scene(scene_key, args):
         result["draw_predicted_trajectory"] = scene_draw_traj
 
         debug_rows.append(_debug_row(result, frame_id))
-        if used and result.get("center") is not None:
-            trajectory.append(result["center"])
+        if used:
+            sc = _safe_center(result.get("center"))
+            if sc is not None:
+                trajectory.append(sc)
 
         if debug:
             r = result
             print(f"Frame {frame_id:05d}: score={r.get('final_score', r['score']):.4f}, "
-                  f"center=({r['center'][0]}, {r['center'][1]}), "
+                  f"center={_safe_center_str(r)}, "
                   f"detected={r['detected']}, predicted={r.get('predicted', False)}, "
                   f"reject={r.get('reject_reason', '')}, "
                   f"lost_count={r.get('lost_count', '')}, "

@@ -47,14 +47,18 @@ def save_trajectory_csv(results, output_path):
         writer = csv.DictWriter(f, fieldnames=TRAJECTORY_FIELDS)
         writer.writeheader()
         for r in results:
+            bb = r.get("bbox")
+            c = r.get("center")
+            valid_bb = (bb is not None and isinstance(bb, (list, tuple)) and len(bb) >= 4)
+            valid_c = (c is not None and isinstance(c, (list, tuple)) and len(c) >= 2)
             row = {
                 "frame_id": r["frame_id"],
-                "x": r["bbox"][0],
-                "y": r["bbox"][1],
-                "w": r["bbox"][2],
-                "h": r["bbox"][3],
-                "center_x": r["center"][0],
-                "center_y": r["center"][1],
+                "x": bb[0] if valid_bb else "",
+                "y": bb[1] if valid_bb else "",
+                "w": bb[2] if valid_bb else "",
+                "h": bb[3] if valid_bb else "",
+                "center_x": c[0] if valid_c else "",
+                "center_y": c[1] if valid_c else "",
                 "score": r["score"],
                 "detected": int(r["detected"]),
                 "predicted": int(r.get("predicted", False)),
