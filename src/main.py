@@ -618,10 +618,13 @@ def run_scene(scene_key, args):
         _scene4_debug_vw.release()
         _scene4_debug_vw = None
 
-    # --- Cleanup interactive window ---
-    cv2.destroyWindow("Scene4 Interactive")
-    for _ in range(3):
-        cv2.waitKey(1)
+    # --- Cleanup interactive window (scene4 only) ---
+    try:
+        cv2.destroyWindow("Scene4 Interactive")
+        for _ in range(3):
+            cv2.waitKey(1)
+    except Exception:
+        pass
 
     # --- Save debug CSV (every frame) ---
     debug_csv_path = DEBUG_DIR / f"{prefix}_score_debug.csv"

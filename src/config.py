@@ -431,135 +431,22 @@ SCENES = {
         "scene4_use_frame_diff_init": False,
         "scene4_diff_after_initialized_only": True,
         "scene4_local_search_radius": 180,
-        # --- 状态机 ---
-        "scene4_init_locked_frames": 30,              # INIT_LOCKED 持续帧数
-        "scene4_init_lock_radius": 80,                # INIT_LOCKED 期允许的最大中心偏移(px)
-        "scene4_max_kalman_predict": 20,              # 最大连续 Kalman 预测帧数→LOST
-        "scene4_max_reacquire_frames": 15,            # 最大连续 REACQUIRE 帧数→KALMAN_PREDICT
-        # --- 稳定期严格门控 ---
-        "scene4_stabilize_frames": 30,                # 初始化后稳定期帧数
-        "scene4_stabilize_max_dist_anchor": 45,       # 稳定期最大锚点距离(px)
-        "scene4_stabilize_max_center_jump": 35,       # 稳定期最大中心跳变(px)
-        # --- 硬空间门控 ---
-        "scene4_tracklet_max_dist_anchor": 60,        # tracklet 接管最大锚点距离(px)
-        "scene4_tracklet_max_dist_anchor_after_stable": 90,  # 稳定期后放宽
-        "scene4_tracklet_max_center_jump": 45,        # tracklet 接管最大中心跳变(px)
-        "scene4_tracklet_max_start_dist_to_last_reliable": 50,  # tracklet 起点距锚点最大距离(px)
-        # --- 分段运动先验 ---
-        "scene4_use_phase_motion_prior": False,        # 启用分段运动先验
-        "scene4_rise_frame_range": [1, 15],           # 上升帧段
-        "scene4_hover_frame_range": [16, 31],         # 悬停帧段
-        "scene4_descend_start_frame": 32,             # 下降开始帧
-        "scene4_rise_expected_dy_sign": -1,           # 上升：dy<0（图像坐标中y减小=上升）
-        "scene4_descend_expected_dy_sign": 1,         # 下降：dy>0
-        # 运动位移限制
-        "scene4_max_dx_per_frame": 25,                # 每帧最大横向位移(px)
-        "scene4_max_dy_per_frame": 35,                # 每帧最大纵向位移(px)
-        "scene4_stabilize_max_dx": 35,                # 稳定期最大横向位移
-        "scene4_stabilize_max_dy": 45,                # 稳定期最大纵向位移
-        "scene4_hover_max_dx": 12,                    # 悬停期最大横向位移
-        "scene4_hover_max_dy": 12,                    # 悬停期最大纵向位移
-        # tracklet 起点限制
-        "scene4_tracklet_max_start_dx_to_last_reliable": 35,
-        "scene4_tracklet_max_start_dy_to_last_reliable": 45,
-        # predicted_anchor gates (primary gate reference)
-        "scene4_candidate_gate_to_pred_anchor": 90,     # 候选必须靠近 predicted_anchor
-        "scene4_tracklet_gate_to_pred_anchor": 90,      # tracklet 接管必须靠近 predicted_anchor
-        "scene4_stabilize_tracklet_gate_to_pred_anchor": 60,  # 稳定期更严格
-        "scene4_tracklet_max_start_dist_to_pred_anchor": 70,  # tracklet 起点距 predicted_anchor 上限
-        # 阶段锚点偏移限制
-        "scene4_rise_max_dx_from_anchor": 60,
-        "scene4_rise_max_upward_dy_from_anchor": 120,
-        "scene4_hover_max_dx_from_anchor": 35,
-        "scene4_hover_max_dy_from_anchor": 35,
-        "scene4_descend_max_dx_from_anchor": 80,
-        "scene4_descend_max_downward_dy_from_anchor": 180,
-        # 阶段 fallback 步长
-        "scene4_rise_hold_step_y": -3,                # 上升期无观测时 y 步长
-        "scene4_descend_hold_step_y": 3,              # 下降期无观测时 y 步长
-        # --- Tracklet 数量控制 ---
-        "scene4_max_tracklets": 80,                   # 最大保留 tracklet 数
-        "scene4_tracklet_prune_by_anchor_radius": 220, # 超出此半径的 tracklet 删除
         # --- 检测模式 ---
-        "scene4_interactive": True,              # 独立交互开关：暂停/框选，不依赖 detection_mode
-        "scene4_detection_mode": "roi_largest_component",  # "tracklet" / "roi_largest_component" / "nearest_motion_contour" / "nearest_motion_contour_interactive"
-        # --- nearest_motion_contour 模式参数 ---
-        "scene4_diff_threshold": 30,              # 帧差二值化阈值
-        "scene4_blur_kernel": 5,                  # 高斯模糊核(奇数)
-        "scene4_morph_kernel": 5,                 # 形态学开闭核
-        "scene4_search_window": 150,              # 最近轮廓搜索范围(px)
-        "scene4_min_motion_area": 100,            # 最小运动轮廓面积
-        "scene4_smooth_factor": 0.7,              # 中心平滑因子(old*0.7 + new*0.3)
-        "scene4_max_trajectory_points": 2000,     # 轨迹点上限
-        "scene4_use_kalman_fallback": False,      # 禁用 Kalman 外推
-        # --- roi_largest_component 模式参数 ---
-        "scene4_roi_component_search_radius": 150,    # ROI 搜索半径(px, 原图坐标)
-        "scene4_component_min_area": 200,               # 最小连通域面积(scaled frame)
-        "scene4_component_max_area": 1000,             # 最大连通域面积
-        "scene4_component_min_width": 50,              # 最小宽度
-        "scene4_component_min_height": 20,             # 最小高度
-        "scene4_component_max_width": 200,             # 最大宽度
-        "scene4_component_max_height": 200,            # 最大高度
+        "scene4_interactive": True,              # 独立交互开关：暂停/框选
+        "scene4_detection_mode": "roi_largest_component",
+        # --- roi_largest_component 参数 ---
+        "scene4_roi_component_search_radius": 150,    # ROI 搜索半径(px)
+        "scene4_component_min_area": 200,             # 最小连通域面积
+        "scene4_component_max_area": 1000,            # 最大连通域面积
+        "scene4_component_min_width": 50,             # 最小宽度
+        "scene4_component_min_height": 20,            # 最小高度
+        "scene4_component_max_width": 200,            # 最大宽度
+        "scene4_component_max_height": 200,           # 最大高度
         "scene4_component_morph_kernel": 3,           # 形态学核大小
         "scene4_component_diff_threshold": 8,         # 帧差二值化阈值
-        # --- 帧差提取 ---
-        "scene4_diff_method": "two_frame",
-        "scene4_diff_threshold": 3,
-        "scene4_diff_use_adaptive": False,
-        "scene4_gaussian_blur": 0,
-        "scene4_morph_open": 0,
-        "scene4_morph_dilate": 1,
-        # --- 面积过滤 ---
-        "scene4_min_area": 8,
-        "scene4_max_area": 800,
-        "scene4_min_w": 4, "scene4_max_w": 120,
-        "scene4_min_h": 4, "scene4_max_h": 120,
-        "scene4_expected_area": 60,
-        "scene4_area_tolerance": 80,
-        "scene4_energy_norm": 500.0,
-        "scene4_bbox_padding": 4,
         # --- 排除区域 ---
         "scene4_use_exclude_rois": True,
         "scene4_exclude_rois": [[1700, 1350, 748, 698]],
-        # --- 模板验证 ---
-        "scene4_use_template_verify": True,
-        "scene4_template_verify_weight": 0.20,
-        # --- Motion tracklet 管理 ---
-        "scene4_use_motion_tracklets": True,
-        "scene4_tracklet_window": 8,                  # tracklet 特征计算窗口
-        "scene4_tracklet_assoc_dist": 45,             # 候选-轨迹片段关联最大距离(px)
-        "scene4_tracklet_max_missed": 3,              # 连续未匹配帧数→删除
-        "scene4_tracklet_min_age": 3,                 # 最小年龄→可被评分
-        # --- Tracklet 接管条件 ---
-        "scene4_reacquire_radius": 220,               # 重接管允许的最大锚点距离(px)
-        "scene4_tracklet_min_direction_score": 0.55,  # 方向一致性最低分（降低以包容无人机弱信号）
-        "scene4_tracklet_min_area_score": 0.35,       # 面积量级最低分（降低）
-        "scene4_tracklet_min_energy_score": 0.15,     # 运动能量最低分（无人机帧差信号弱）
-        "scene4_tracklet_min_template_score": 0.20,   # 模板NCC最低分
-        "scene4_tracklet_min_total_score": 0.45,      # 总分最低（降低）
-        "scene4_tracklet_min_net_displacement": 5,    # 最小净位移(px)（无人机可能缓慢移动）
-        # --- 固定 bbox ---
-        "scene4_use_fixed_bbox_size": True,
-        "scene4_bbox_size_update_alpha": 0.05,
-        # --- 模板冻结 ---
-        "scene4_freeze_template_frames": 120,         # 前N帧不更新模板
-        "scene4_template_update_threshold": 0.70,     # 更新模板所需最低 NCC 分
-        # --- Hover 模板保持 ---
-        "scene4_use_hover_template_hold": True,
-        "scene4_hover_template_threshold": 0.45,
-        "scene4_hover_search_radius": 45,
-        "scene4_hover_max_shift": 35,
-        "scene4_hover_max_frames": 60,
-        # --- 其他 ---
-        "scene4_max_lost": 20,
-        "scene4_draw_predicted": True,
-        "scene4_hide_after_lost": False,
-        # --- 可见性判断 (保留兼容) ---
-        "scene4_use_visibility_gate": True,
-        "scene4_min_score_for_visible": 0.32,
-        "scene4_low_score_patience": 5,
-        "scene4_min_local_contrast": 8.0,
-        "scene4_stop_when_occluded": True,
     },
 }
 
