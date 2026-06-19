@@ -462,6 +462,11 @@ SCENES = {
         # tracklet 起点限制
         "scene4_tracklet_max_start_dx_to_last_reliable": 35,
         "scene4_tracklet_max_start_dy_to_last_reliable": 45,
+        # predicted_anchor gates (primary gate reference)
+        "scene4_candidate_gate_to_pred_anchor": 90,     # 候选必须靠近 predicted_anchor
+        "scene4_tracklet_gate_to_pred_anchor": 90,      # tracklet 接管必须靠近 predicted_anchor
+        "scene4_stabilize_tracklet_gate_to_pred_anchor": 60,  # 稳定期更严格
+        "scene4_tracklet_max_start_dist_to_pred_anchor": 70,  # tracklet 起点距 predicted_anchor 上限
         # 阶段锚点偏移限制
         "scene4_rise_max_dx_from_anchor": 60,
         "scene4_rise_max_upward_dy_from_anchor": 120,

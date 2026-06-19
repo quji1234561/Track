@@ -112,6 +112,9 @@ class Scene4FrameDiffTracker:
         self._frame_count = 0
         self._frames_since_init = 0
 
+        # Predicted anchor (moves with phase, used for search / gate comparison)
+        self.predicted_anchor_center = None
+
         # Counters
         self.lost_count = 0
         self.kalman_predict_count = 0
@@ -240,6 +243,7 @@ class Scene4FrameDiffTracker:
         self.last_reliable_bbox = self.bbox.copy() if self.bbox else None
         self.fixed_box_w = self.bbox[2] if self.bbox else 0
         self.fixed_box_h = self.bbox[3] if self.bbox else 0
+        self.predicted_anchor_center = self.center
         self.expected_motion_area = self.cfg.get("scene4_expected_area", 60)
         self.expected_motion_energy = None
         self.last_motion_direction = None
@@ -335,6 +339,13 @@ class Scene4FrameDiffTracker:
             patch_diff = diff[y:y + h, x:x + w]
             motion_energy = float(np.sum(patch_diff)) if patch_diff.size > 0 else 0.0
             mean_diff = motion_energy / max(area, 1)
+
+            # ── Gate: candidate must be near predicted_anchor ──────
+            cand_gate = self.cfg.get("scene4_candidate_gate_to_pred_anchor", 90)
+            if self.predicted_anchor_center and cand_gate > 0:
+                d_pa = _distance((cx_o, cy_o), self.predicted_anchor_center)
+                if d_pa > cand_gate:
+                    continue  # far from predicted anchor → skip
 
             bbox_o = [int(x / rs), int(y / rs), int(w / rs), int(h / rs)]
 
@@ -519,10 +530,15 @@ class Scene4FrameDiffTracker:
 
             # Detailed rejection tracking
             reject_flags = []
+            phase = self._scene4_motion_phase(frame_id)  # compute early for phase-adaptive gates
             if trk["age"] < min_age:
                 reject_flags.append("age")
-            if direction_score < min_dir:
-                reject_flags.append(f"dir({direction_score:.2f}<{min_dir})")
+            # Phase-adaptive direction threshold (hover = little movement expected)
+            _min_dir = min_dir
+            if phase == "HOVER":
+                _min_dir = 0.20  # hovering drone has weak direction
+            if direction_score < _min_dir:
+                reject_flags.append(f"dir({direction_score:.2f}<{_min_dir})")
             if area_score < min_area:
                 reject_flags.append(f"area({area_score:.2f}<{min_area})")
             if energy_score < min_energy:
@@ -536,84 +552,114 @@ class Scene4FrameDiffTracker:
             if dist_anchor > reacq_radius:
                 reject_flags.append(f"dist({dist_anchor:.0f}>{reacq_radius})")
 
-            # ── Hard spatial + phase gates (take precedence over scores) ──
+            # ── Hard spatial + phase gates (use predicted_anchor as primary reference) ──
             lrc = self.last_reliable_center
+            pac = self.predicted_anchor_center
             start_c = centers[0] if len(centers) > 0 else None
             last_c_from_centers = centers[-1] if len(centers) > 0 else None
             start_dist_to_lrc = -1.0
+            start_dist_to_pac = -1.0
+            last_dist_to_pac = -1.0
             center_jump = -1.0
             dx_to_lrc = 0.0
             dy_to_lrc = 0.0
             start_dx_to_lrc = 0.0
             start_dy_to_lrc = 0.0
 
-            # Compute dx/dy from last_reliable_center to tracklet's last position
+            # Compute dx/dy from last_reliable_center (for debug/reference)
             if lrc and last_c_from_centers:
                 dx_to_lrc = last_c_from_centers[0] - lrc[0]
                 dy_to_lrc = last_c_from_centers[1] - lrc[1]
                 center_jump = _distance(last_c_from_centers, lrc)
-
-            # Compute start dx/dy
             if lrc and start_c:
                 start_dx_to_lrc = start_c[0] - lrc[0]
                 start_dy_to_lrc = start_c[1] - lrc[1]
                 start_dist_to_lrc = _distance(start_c, lrc)
 
-            # ── Phase-aware motion gates ────────────────────────────
-            phase = self._scene4_motion_phase(frame_id)
+            # Compute distances to predicted_anchor (primary gate reference)
+            if pac and last_c_from_centers:
+                last_dist_to_pac = _distance(last_c_from_centers, pac)
+            if pac and start_c:
+                start_dist_to_pac = _distance(start_c, pac)
+
+            # ── Primary gate: tracklet must be near predicted_anchor ──
+            trk_gate = self.cfg.get("scene4_tracklet_gate_to_pred_anchor", 90)
+            stabilize_frames = self.cfg.get("scene4_stabilize_frames", 30)
+            frames_since_init = frame_id - self.init_frame_id if self.init_frame_id >= 0 else 999
+            if frames_since_init <= stabilize_frames:
+                trk_gate = self.cfg.get("scene4_stabilize_tracklet_gate_to_pred_anchor", 60)
+
+            if last_dist_to_pac > trk_gate:
+                reject_flags.append(
+                    f"tracklet_far_from_predicted_anchor({last_dist_to_pac:.0f}>{trk_gate})")
+
+            # Tracklet start must be near predicted_anchor too
+            max_start_dist_pa = self.cfg.get("scene4_tracklet_max_start_dist_to_pred_anchor", 70)
+            if start_dist_to_pac > max_start_dist_pa:
+                reject_flags.append(
+                    f"tracklet_start_not_near_predicted_anchor({start_dist_to_pac:.0f}>{max_start_dist_pa})")
+
+            # ── Phase-aware motion gates (relative to predicted_anchor) ──
+            # phase already computed above
             phase_pass = True
             phase_reject = []
 
+            # Use dx/dy relative to predicted_anchor (pac)
+            dx_pa = (last_c_from_centers[0] - pac[0]) if (pac and last_c_from_centers) else 999
+            dy_pa = (last_c_from_centers[1] - pac[1]) if (pac and last_c_from_centers) else 999
+
+            # Proximity bonus: when tracklet is very close to predicted_anchor,
+            # relax phase direction gates (strong positional signal outweighs weak motion check)
+            close_to_pa = (last_dist_to_pac > 0 and last_dist_to_pac <= 35)
+            very_close_to_pa = (last_dist_to_pac > 0 and last_dist_to_pac <= 20)
+
             if phase == "RISE":
                 stabilize_max_dx = self.cfg.get("scene4_stabilize_max_dx", 35)
-                stabilize_max_dy = self.cfg.get("scene4_stabilize_max_dy", 45)
-                if abs(dx_to_lrc) > stabilize_max_dx:
+                if abs(dx_pa) > stabilize_max_dx:
                     phase_pass = False
-                    phase_reject.append(f"rise_x_jump_too_large({abs(dx_to_lrc):.0f}>{stabilize_max_dx})")
-                if dy_to_lrc > 10:
+                    phase_reject.append(f"rise_x_jump_too_large({abs(dx_pa):.0f}>{stabilize_max_dx})")
+                # Relax vertical direction gate when close to predicted_anchor
+                dy_allow = 10
+                if close_to_pa:
+                    dy_allow = 30
+                if very_close_to_pa:
+                    dy_allow = 60  # very close → almost any vertical motion OK
+                if dy_pa > dy_allow:
                     phase_pass = False
-                    phase_reject.append(f"rise_wrong_vertical_direction(dy={dy_to_lrc:.0f}>10)")
-                if abs(dy_to_lrc) > stabilize_max_dy:
-                    phase_pass = False
-                    phase_reject.append(f"rise_y_jump_too_large({abs(dy_to_lrc):.0f}>{stabilize_max_dy})")
+                    phase_reject.append(f"rise_wrong_vertical_direction(dy={dy_pa:.0f}>{dy_allow})")
 
             elif phase == "HOVER":
                 hover_max_dx = self.cfg.get("scene4_hover_max_dx", 12)
                 hover_max_dy = self.cfg.get("scene4_hover_max_dy", 12)
-                if abs(dx_to_lrc) > hover_max_dx or abs(dy_to_lrc) > hover_max_dy:
+                if close_to_pa:
+                    hover_max_dx = 25
+                    hover_max_dy = 25
+                if very_close_to_pa:
+                    hover_max_dx = 40
+                    hover_max_dy = 40
+                if abs(dx_pa) > hover_max_dx or abs(dy_pa) > hover_max_dy:
                     phase_pass = False
                     phase_reject.append(
-                        f"hover_motion_too_large(dx={abs(dx_to_lrc):.0f}>{hover_max_dx},dy={abs(dy_to_lrc):.0f}>{hover_max_dy})")
+                        f"hover_motion_too_large(dx={abs(dx_pa):.0f}>{hover_max_dx},dy={abs(dy_pa):.0f}>{hover_max_dy})")
 
             elif phase == "DESCEND":
                 max_dx_frame = self.cfg.get("scene4_max_dx_per_frame", 25)
-                max_dy_frame = self.cfg.get("scene4_max_dy_per_frame", 35)
-                if abs(dx_to_lrc) > max_dx_frame:
+                if abs(dx_pa) > max_dx_frame:
                     phase_pass = False
-                    phase_reject.append(f"descend_x_jump_too_large({abs(dx_to_lrc):.0f}>{max_dx_frame})")
-                if dy_to_lrc < -10:
+                    phase_reject.append(f"descend_x_jump_too_large({abs(dx_pa):.0f}>{max_dx_frame})")
+                dy_allow = -10
+                if close_to_pa:
+                    dy_allow = -30
+                if very_close_to_pa:
+                    dy_allow = -60
+                if dy_pa < dy_allow:
                     phase_pass = False
-                    phase_reject.append(f"descend_wrong_vertical_direction(dy={dy_to_lrc:.0f}<-10)")
-                if abs(dy_to_lrc) > max_dy_frame:
-                    phase_pass = False
-                    phase_reject.append(f"descend_y_jump_too_large({abs(dy_to_lrc):.0f}>{max_dy_frame})")
+                    phase_reject.append(f"descend_wrong_vertical_direction(dy={dy_pa:.0f}<{dy_allow})")
 
             if not phase_pass:
                 reject_flags.extend(phase_reject)
 
-            # ── Tracklet start must be near last_reliable ───────────
-            max_start_dx = self.cfg.get("scene4_tracklet_max_start_dx_to_last_reliable", 35)
-            max_start_dy = self.cfg.get("scene4_tracklet_max_start_dy_to_last_reliable", 45)
-            if abs(start_dx_to_lrc) > max_start_dx:
-                reject_flags.append(
-                    f"tracklet_start_x_not_near_target({abs(start_dx_to_lrc):.0f}>{max_start_dx})")
-            if abs(start_dy_to_lrc) > max_start_dy:
-                reject_flags.append(
-                    f"tracklet_start_y_not_near_target({abs(start_dy_to_lrc):.0f}>{max_start_dy})")
-
-            # ── Euclidean dist_anchor check (broad filter) ──────────
-            frames_since_init = frame_id - self.init_frame_id if self.init_frame_id >= 0 else 999
-            stabilize_frames = self.cfg.get("scene4_stabilize_frames", 30)
+            # ── Euclidean dist_anchor (to last_reliable, broad safety filter) ──
             if frames_since_init <= stabilize_frames:
                 max_dist_anchor = self.cfg.get("scene4_stabilize_max_dist_anchor", 45)
             else:
@@ -638,6 +684,8 @@ class Scene4FrameDiffTracker:
                 "mean_energy": mean_energy,
                 "center_jump": center_jump,
                 "start_dist_to_lrc": start_dist_to_lrc,
+                "last_dist_to_pac": last_dist_to_pac,
+                "start_dist_to_pac": start_dist_to_pac,
                 "dx_to_lrc": dx_to_lrc,
                 "dy_to_lrc": dy_to_lrc,
                 "start_dx_to_lrc": start_dx_to_lrc,
@@ -725,7 +773,10 @@ class Scene4FrameDiffTracker:
         kx, ky = self.kalman.predict()
         pred_cx, pred_cy = kx, ky
 
-        # ── Extract frame-diff candidates ───────────────────────────
+        # ── Update predicted anchor (moves with phase) ───────────────
+        self._update_predicted_anchor(frame_id)
+
+        # ── Extract frame-diff candidates (filtered by predicted_anchor) ──
         raw_candidates = self._extract_candidates(sf, work, rs, frame_id)
 
         # ── Update tracklets ────────────────────────────────────────
@@ -883,6 +934,48 @@ class Scene4FrameDiffTracker:
     #  Motion phase detection
     # =========================================================================
 
+    def _update_predicted_anchor(self, frame_id):
+        """Update predicted_anchor_center based on phase prior or last accept.
+
+        - After a tracklet accept: predicted_anchor = last_reliable_center.
+        - RISE phase: predicted_anchor moves up each frame from its previous position.
+        - HOVER phase: predicted_anchor = last_reliable_center.
+        - DESCEND phase: predicted_anchor moves down each frame from its previous position.
+        - Otherwise: stays at last_reliable_center.
+
+        This is the current search center, NOT the last confirmed position.
+        """
+        anchor = self.last_reliable_center or self.anchor_center
+        if anchor is None:
+            self.predicted_anchor_center = self.center
+            return
+
+        phase = self._scene4_motion_phase(frame_id)
+        prev_pa = self.predicted_anchor_center
+
+        if phase == "RISE":
+            step_y = self.cfg.get("scene4_rise_hold_step_y", -3)
+            max_dy = self.cfg.get("scene4_stabilize_max_dy", 45)
+            if prev_pa:
+                new_y = prev_pa[1] + step_y
+            else:
+                new_y = anchor[1] + step_y
+            new_y = max(new_y, anchor[1] - max_dy)
+            self.predicted_anchor_center = (anchor[0], int(new_y))
+
+        elif phase == "DESCEND":
+            step_y = self.cfg.get("scene4_descend_hold_step_y", 3)
+            descend_max = self.cfg.get("scene4_descend_max_downward_dy_from_anchor", 180)
+            if prev_pa:
+                new_y = prev_pa[1] + step_y
+            else:
+                new_y = anchor[1] + step_y
+            new_y = min(new_y, anchor[1] + descend_max)
+            self.predicted_anchor_center = (anchor[0], int(new_y))
+
+        else:  # HOVER / INIT / NONE
+            self.predicted_anchor_center = anchor
+
     def _scene4_motion_phase(self, frame_id):
         """Return RISE / HOVER / DESCEND / INIT based on known drone motion."""
         if not self.cfg.get("scene4_use_phase_motion_prior", False):
@@ -943,6 +1036,7 @@ class Scene4FrameDiffTracker:
         bbox = [int(cx - fw // 2), int(cy - fh // 2), fw, fh]
         self.center = (cx, cy)
         self.bbox = bbox
+        self.predicted_anchor_center = (cx, cy)  # keep in sync
         self.state = self.STATE_PHASE_HOLD
 
         dbg.update({
@@ -1000,6 +1094,7 @@ class Scene4FrameDiffTracker:
         self.kalman.update(new_center[0], new_center[1])
         self.last_reliable_center = new_center
         self.last_reliable_bbox = new_bbox
+        self.predicted_anchor_center = new_center  # reset to accepted position
 
         # Update motion statistics (EMA)
         self.expected_motion_area = (
@@ -1241,6 +1336,8 @@ class Scene4FrameDiffTracker:
             "scene4_reject_reason_top": "",
             "scene4_center_source": "none",
             "scene4_motion_phase": self._scene4_motion_phase(frame_id),
+            "scene4_predicted_anchor_x": _safe_coord(self.predicted_anchor_center, 0),
+            "scene4_predicted_anchor_y": _safe_coord(self.predicted_anchor_center, 1),
         }
 
         # ── Defaults: coordinates → "", distances/scores → -1, text → "", counts → 0 ──
@@ -1271,6 +1368,9 @@ class Scene4FrameDiffTracker:
             "scene4_best_tracklet_abs_dy_to_last_reliable",
             "scene4_best_tracklet_start_dx_to_last_reliable",
             "scene4_best_tracklet_start_dy_to_last_reliable",
+            "scene4_best_tracklet_dist_to_predicted_anchor",
+            "scene4_best_tracklet_start_dist_to_predicted_anchor",
+            "scene4_best_tracklet_last_dist_to_predicted_anchor",
         ]
         _count_fields = [
             "scene4_best_tracklet_id",
@@ -1345,6 +1445,9 @@ class Scene4FrameDiffTracker:
                 "scene4_best_tracklet_abs_dy_to_last_reliable": abs(_safe_num(best.get("dy_to_lrc"), 0.0)) if best.get("dy_to_lrc") is not None else -1.0,
                 "scene4_best_tracklet_start_dx_to_last_reliable": _safe_num(best.get("start_dx_to_lrc"), -1.0),
                 "scene4_best_tracklet_start_dy_to_last_reliable": _safe_num(best.get("start_dy_to_lrc"), -1.0),
+                "scene4_best_tracklet_dist_to_predicted_anchor": _safe_num(best.get("last_dist_to_pac"), -1.0),
+                "scene4_best_tracklet_start_dist_to_predicted_anchor": _safe_num(best.get("start_dist_to_pac"), -1.0),
+                "scene4_best_tracklet_last_dist_to_predicted_anchor": _safe_num(best.get("last_dist_to_pac"), -1.0),
                 # phase gates
                 "scene4_motion_phase": best.get("phase", ""),
                 "scene4_phase_gate_pass": "1" if best.get("phase_pass", False) else "0",

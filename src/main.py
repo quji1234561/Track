@@ -123,6 +123,11 @@ DEBUG_CSV_FIELDS = [
     "scene4_best_tracklet_abs_dy_to_last_reliable",
     "scene4_best_tracklet_start_dx_to_last_reliable",
     "scene4_best_tracklet_start_dy_to_last_reliable",
+    "scene4_best_tracklet_dist_to_predicted_anchor",
+    "scene4_best_tracklet_start_dist_to_predicted_anchor",
+    "scene4_best_tracklet_last_dist_to_predicted_anchor",
+    # scene4 predicted anchor
+    "scene4_predicted_anchor_x", "scene4_predicted_anchor_y",
     # scene4 phase
     "scene4_motion_phase", "scene4_phase_gate_pass",
     "scene4_phase_reject_flags",
