@@ -177,8 +177,8 @@ def _debug_row(result, frame_id):
         row[f] = val
     row["frame_id"] = frame_id
 
-    # ── Fallback: extract center_x / center_y from center tuple if not already set ──
-    if not row.get("center_x") and not row.get("center_y"):
+    # ── Fallback: extract center_x / center_y from center tuple, but only if truly absent ──
+    if row.get("center_x") in ("", None) and row.get("center_y") in ("", None):
         c = result.get("center", None)
         if c is not None and isinstance(c, (list, tuple)) and len(c) >= 2:
             row["center_x"] = c[0]

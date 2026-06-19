@@ -27,6 +27,32 @@ def _distance(p1, p2):
     return np.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2)
 
 
+def _valid_point(p):
+    """True if p is a valid 2D point (tuple/list of length >= 2)."""
+    return p is not None and isinstance(p, (list, tuple)) and len(p) >= 2
+
+
+def _safe_coord(p, idx):
+    """Return coordinate value or '' if invalid."""
+    if _valid_point(p):
+        return int(p[idx])
+    return ""
+
+
+def _safe_dist(a, b):
+    """Return Euclidean distance or -1 if either point invalid."""
+    if not _valid_point(a) or not _valid_point(b):
+        return -1.0
+    return float(((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5)
+
+
+def _safe_num(v, default=-1.0):
+    """Return v or default if v is None/invalid."""
+    if v is None:
+        return default
+    return v
+
+
 class Scene4FrameDiffTracker:
     """Motion-tracklet tracker with state machine. No single-frame candidate takeover."""
 
@@ -748,15 +774,12 @@ class Scene4FrameDiffTracker:
 
         # ── Center jump diagnostics (before updating) ───────────────
         before_center = self.center or self.last_reliable_center
-        if before_center is not None:
-            center_jump = _distance(before_center, new_center)
-        else:
-            center_jump = -1.0
-        dbg["scene4_center_before_x"] = int(before_center[0]) if before_center else 0
-        dbg["scene4_center_before_y"] = int(before_center[1]) if before_center else 0
-        dbg["scene4_center_after_x"] = int(new_center[0])
-        dbg["scene4_center_after_y"] = int(new_center[1])
-        dbg["scene4_center_jump"] = round(center_jump, 2)
+        center_jump = _safe_dist(before_center, new_center)
+        dbg["scene4_center_before_x"] = _safe_coord(before_center, 0)
+        dbg["scene4_center_before_y"] = _safe_coord(before_center, 1)
+        dbg["scene4_center_after_x"] = _safe_coord(new_center, 0)
+        dbg["scene4_center_after_y"] = _safe_coord(new_center, 1)
+        dbg["scene4_center_jump"] = center_jump
         dbg["scene4_tracklet_accept_reason"] = "passed_tracklet_gates"
 
 
@@ -999,7 +1022,11 @@ class Scene4FrameDiffTracker:
         return result
 
     def _build_debug(self, scored_tracklets, raw_candidates):
-        """Build debug info dict from current tracklets/candidates."""
+        """Build debug info dict from current tracklets/candidates.
+
+        Defaults: coords → \"\", distances/scores → -1, text → \"\", counts → 0.
+        Only overwritten with real values when a best tracklet exists.
+        """
         best = scored_tracklets[0] if scored_tracklets else None
         dbg = {
             "scene4_state": self.state,
@@ -1010,23 +1037,19 @@ class Scene4FrameDiffTracker:
             "scene4_center_source": "none",
         }
 
-        # ── All best-tracklet fields (zeroed by default) ──────────
-        _zero_fields = [
-            # identity
-            "scene4_best_tracklet_id",
-            "scene4_best_tracklet_start_frame", "scene4_best_tracklet_end_frame",
-            # positions
+        # ── Defaults: coordinates → "", distances/scores → -1, text → "", counts → 0 ──
+        _coord_fields = [
             "scene4_best_tracklet_start_x", "scene4_best_tracklet_start_y",
             "scene4_best_tracklet_last_x", "scene4_best_tracklet_last_y",
-            # scores
-            "scene4_best_tracklet_age", "scene4_best_tracklet_score",
+        ]
+        _dist_score_fields = [
+            "scene4_best_tracklet_score",
             "scene4_best_tracklet_area_score", "scene4_best_tracklet_energy_score",
             "scene4_best_tracklet_direction_score",
             "scene4_best_tracklet_continuity_score",
             "scene4_best_tracklet_anchor_score",
             "scene4_best_tracklet_template_score",
             "scene4_best_tracklet_net_displacement",
-            # distances
             "scene4_best_tracklet_dist_to_init_center",
             "scene4_best_tracklet_dist_to_anchor",
             "scene4_best_tracklet_dist_to_last_reliable",
@@ -1034,36 +1057,48 @@ class Scene4FrameDiffTracker:
             "scene4_best_tracklet_last_dist_to_last_reliable",
             "scene4_best_tracklet_start_dist_to_init_center",
             "scene4_best_tracklet_last_dist_to_init_center",
-            # accept / reject
+        ]
+        _count_fields = [
+            "scene4_best_tracklet_id",
+            "scene4_best_tracklet_start_frame", "scene4_best_tracklet_end_frame",
+            "scene4_best_tracklet_age",
+        ]
+        _text_fields = [
             "scene4_tracklet_accept", "scene4_tracklet_accept_reason",
             "scene4_tracklet_reject_flags",
         ]
-        for k in _zero_fields:
-            if k.endswith(("_x", "_y")) or k.endswith(("_frame", "_id")):
-                dbg[k] = 0
-            elif k in ("scene4_tracklet_accept_reason", "scene4_tracklet_reject_flags"):
-                dbg[k] = ""
-            else:
-                dbg[k] = 0.0
+        _center_jump_coords = [
+            "scene4_center_before_x", "scene4_center_before_y",
+            "scene4_center_after_x", "scene4_center_after_y",
+        ]
+        for k in _coord_fields + _center_jump_coords:
+            dbg[k] = ""
+        for k in _dist_score_fields:
+            dbg[k] = -1.0
+        for k in _count_fields:
+            dbg[k] = 0 if k != "scene4_best_tracklet_id" else -1
+        for k in _text_fields:
+            dbg[k] = ""
+        # center_jump is a distance, default -1
+        dbg["scene4_center_jump"] = -1.0
 
         if best:
             trk = best["tracklet"]
             centers = trk["centers"]
             frames = trk["frames"]
-            start_c = centers[0] if centers else (0, 0)
-            last_c = centers[-1] if centers else (0, 0)
+            start_c = centers[0] if centers else None
+            last_c = centers[-1] if centers else None
             lrc = self.last_reliable_center
             ic = self.init_center
-            anchor = lrc or ic
 
             dbg.update({
-                "scene4_best_tracklet_id": trk["id"],
+                "scene4_best_tracklet_id": int(trk["id"]),
                 "scene4_best_tracklet_start_frame": int(frames[0]) if frames else 0,
                 "scene4_best_tracklet_end_frame": int(frames[-1]) if frames else 0,
-                "scene4_best_tracklet_start_x": int(start_c[0]),
-                "scene4_best_tracklet_start_y": int(start_c[1]),
-                "scene4_best_tracklet_last_x": int(last_c[0]),
-                "scene4_best_tracklet_last_y": int(last_c[1]),
+                "scene4_best_tracklet_start_x": _safe_coord(start_c, 0),
+                "scene4_best_tracklet_start_y": _safe_coord(start_c, 1),
+                "scene4_best_tracklet_last_x": _safe_coord(last_c, 0),
+                "scene4_best_tracklet_last_y": _safe_coord(last_c, 1),
                 # scores
                 "scene4_best_tracklet_age": trk["age"],
                 "scene4_best_tracklet_score": round(best["total_score"], 4),
@@ -1075,13 +1110,13 @@ class Scene4FrameDiffTracker:
                 "scene4_best_tracklet_template_score": round(best["template_score"], 4),
                 "scene4_best_tracklet_net_displacement": round(best["net_displacement"], 2),
                 # distance diagnostics
-                "scene4_best_tracklet_dist_to_init_center": round(_distance(last_c, ic), 2) if ic else -1.0,
+                "scene4_best_tracklet_dist_to_init_center": _safe_dist(last_c, ic),
                 "scene4_best_tracklet_dist_to_anchor": round(best["dist_anchor"], 2),
-                "scene4_best_tracklet_dist_to_last_reliable": round(_distance(last_c, lrc), 2) if lrc else -1.0,
-                "scene4_best_tracklet_start_dist_to_last_reliable": round(_distance(start_c, lrc), 2) if lrc else -1.0,
-                "scene4_best_tracklet_last_dist_to_last_reliable": round(_distance(last_c, lrc), 2) if lrc else -1.0,
-                "scene4_best_tracklet_start_dist_to_init_center": round(_distance(start_c, ic), 2) if ic else -1.0,
-                "scene4_best_tracklet_last_dist_to_init_center": round(_distance(last_c, ic), 2) if ic else -1.0,
+                "scene4_best_tracklet_dist_to_last_reliable": _safe_dist(last_c, lrc),
+                "scene4_best_tracklet_start_dist_to_last_reliable": _safe_dist(start_c, lrc),
+                "scene4_best_tracklet_last_dist_to_last_reliable": _safe_dist(last_c, lrc),
+                "scene4_best_tracklet_start_dist_to_init_center": _safe_dist(start_c, ic),
+                "scene4_best_tracklet_last_dist_to_init_center": _safe_dist(last_c, ic),
                 # accept / reject
                 "scene4_tracklet_accept": 1 if best["_accept"] else 0,
                 "scene4_tracklet_accept_reason": "passed_tracklet_gates" if best["_accept"] else "",
