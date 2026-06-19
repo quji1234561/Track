@@ -480,6 +480,18 @@ SCENES = {
         # --- Tracklet 数量控制 ---
         "scene4_max_tracklets": 80,                   # 最大保留 tracklet 数
         "scene4_tracklet_prune_by_anchor_radius": 220, # 超出此半径的 tracklet 删除
+        # --- 检测模式 ---
+        "scene4_detection_mode": "roi_largest_component",  # "tracklet" or "roi_largest_component"
+        # --- roi_largest_component 模式参数 ---
+        "scene4_roi_component_search_radius": 120,    # ROI 搜索半径(px, 原图坐标)
+        "scene4_component_min_area": 5,               # 最小连通域面积(scaled frame)
+        "scene4_component_max_area": 800,             # 最大连通域面积
+        "scene4_component_min_width": 2,              # 最小宽度
+        "scene4_component_min_height": 2,             # 最小高度
+        "scene4_component_max_width": 80,             # 最大宽度
+        "scene4_component_max_height": 80,            # 最大高度
+        "scene4_component_morph_kernel": 3,           # 形态学核大小
+        "scene4_component_diff_threshold": 8,         # 帧差二值化阈值
         # --- 帧差提取 ---
         "scene4_diff_method": "two_frame",
         "scene4_diff_threshold": 3,

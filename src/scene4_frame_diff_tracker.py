@@ -744,6 +744,159 @@ class Scene4FrameDiffTracker:
             return 0.4
 
     # =========================================================================
+    #  ROI largest-component detection (simple mode)
+    # =========================================================================
+
+    def _detect_roi_largest_component(self, sf, work_full, rs, frame_id):
+        """Simple detection: largest connected component in ROI around anchor.
+
+        Returns result dict. No tracklets, no state machine.
+        Only updates last_reliable when a valid component is found.
+        """
+        anchor = self.predicted_anchor_center or self.center or self.last_reliable_center
+        if anchor is None:
+            return self._make_result(frame_id, None, None, -1.0,
+                                     False, True, False, False,
+                                     "NO_COMPONENT_HOLD", "scene4_no_anchor")
+
+        search_rad = self.cfg.get("scene4_roi_component_search_radius", 120)
+        min_a = self.cfg.get("scene4_component_min_area", 5)
+        max_a = self.cfg.get("scene4_component_max_area", 800)
+        min_w = self.cfg.get("scene4_component_min_width", 2)
+        max_w = self.cfg.get("scene4_component_max_width", 80)
+        min_h = self.cfg.get("scene4_component_min_height", 2)
+        max_h = self.cfg.get("scene4_component_max_height", 80)
+        morph_k = self.cfg.get("scene4_component_morph_kernel", 3)
+        diff_thr = self.cfg.get("scene4_component_diff_threshold", 8)
+
+        # ── ROI in scaled frame ──────────────────────────────────────
+        ax, ay = anchor
+        rx1 = max(0, int((ax - search_rad) * rs))
+        ry1 = max(0, int((ay - search_rad) * rs))
+        rx2 = min(sf.shape[1], int((ax + search_rad) * rs))
+        ry2 = min(sf.shape[0], int((ay + search_rad) * rs))
+        if rx2 <= rx1 + 10 or ry2 <= ry1 + 10:
+            return self._make_result(frame_id, None, None, -1.0,
+                                     False, True, False, False,
+                                     "NO_COMPONENT_HOLD", "scene4_roi_too_small")
+
+        roi = sf[ry1:ry2, rx1:rx2]
+
+        # ── Frame diff in ROI ────────────────────────────────────────
+        if self._prev_gray is not None:
+            prev_roi = self._prev_gray[ry1:ry2, rx1:rx2]
+            diff = cv2.absdiff(roi, prev_roi)
+        else:
+            diff = np.zeros_like(roi)
+
+        _, mask = cv2.threshold(diff, diff_thr, 255, cv2.THRESH_BINARY)
+        mask = mask.astype(np.uint8)
+
+        # Morphology
+        if morph_k > 0:
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (morph_k, morph_k))
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+        # ── Connected components ─────────────────────────────────────
+        nl, lbls, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
+
+        dbg = {
+            "scene4_component_count": nl - 1,
+            "scene4_component_valid_count": 0,
+            "scene4_component_best_area": 0,
+            "scene4_component_best_w": 0, "scene4_component_best_h": 0,
+            "scene4_component_best_x": 0, "scene4_component_best_y": 0,
+            "scene4_component_reject_small_area_count": 0,
+            "scene4_component_reject_large_area_count": 0,
+            "scene4_component_reject_size_count": 0,
+            "scene4_motion_phase": self._scene4_motion_phase(frame_id),
+            "scene4_predicted_anchor_x": _safe_coord(self.predicted_anchor_center, 0),
+            "scene4_predicted_anchor_y": _safe_coord(self.predicted_anchor_center, 1),
+        }
+
+        # ── Filter & pick largest ────────────────────────────────────
+        best = None
+        best_area = 0
+        for i in range(1, nl):
+            x, y, w, h, area = stats[i]
+            if area < min_a:
+                dbg["scene4_component_reject_small_area_count"] += 1
+                continue
+            if area > max_a:
+                dbg["scene4_component_reject_large_area_count"] += 1
+                continue
+            if w < min_w or h < min_h or w > max_w or h > max_h:
+                dbg["scene4_component_reject_size_count"] += 1
+                continue
+            if area > best_area:
+                best_area = area
+                cx_s, cy_s = centroids[i]
+                best = (i, x, y, w, h, area, cx_s, cy_s)
+
+        dbg["scene4_component_valid_count"] = 1 if best else 0
+        if best:
+            dbg["scene4_component_best_area"] = best_area
+            dbg["scene4_component_best_w"] = best[3]
+            dbg["scene4_component_best_h"] = best[4]
+            dbg["scene4_component_best_x"] = best[1]
+            dbg["scene4_component_best_y"] = best[2]
+
+        # ── Build result ─────────────────────────────────────────────
+        if best:
+            _i, bx, by, bw, bh, barea, bcx_s, bcy_s = best
+            # Convert back to original image coordinates
+            cx_o = int((rx1 + bcx_s) / rs)
+            cy_o = int((ry1 + bcy_s) / rs)
+            bx_o = int((rx1 + bx) / rs)
+            by_o = int((ry1 + by) / rs)
+            bw_o = int(bw / rs)
+            bh_o = int(bh / rs)
+
+            # Use fixed bbox size around centroid
+            fw, fh = self.fixed_box_w, self.fixed_box_h
+            if fw <= 0:
+                fw, fh = bw_o, bh_o
+            bbox_o = [int(cx_o - fw // 2), int(cy_o - fh // 2), fw, fh]
+
+            # Update state
+            self.center = (cx_o, cy_o)
+            self.bbox = bbox_o
+            self.last_reliable_center = (cx_o, cy_o)
+            self.last_reliable_bbox = bbox_o
+            self.predicted_anchor_center = (cx_o, cy_o)
+            self.kalman.update(cx_o, cy_o)
+            self.lost_count = 0
+            self.state = "COMPONENT_TRACK"
+
+            dbg.update({
+                "scene4_state": "COMPONENT_TRACK",
+                "scene4_center_source": "roi_largest_component",
+                "scene4_reject_reason_top": "",
+            })
+            return self._make_result(frame_id, bbox_o, (cx_o, cy_o),
+                                     float(best_area), True, False, False, True,
+                                     "COMPONENT_TRACK", "", dbg)
+        else:
+            # No valid component — hold at predicted_anchor
+            pa = self.predicted_anchor_center or anchor
+            fw, fh = self.fixed_box_w, self.fixed_box_h
+            if fw <= 0:
+                fw, fh = 60, 30
+            hold_bbox = [int(pa[0] - fw // 2), int(pa[1] - fh // 2), fw, fh]
+            self.center = pa
+            self.bbox = hold_bbox
+            self.state = "NO_COMPONENT_HOLD"
+
+            dbg.update({
+                "scene4_state": "NO_COMPONENT_HOLD",
+                "scene4_center_source": "component_hold",
+                "scene4_reject_reason_top": "scene4_no_valid_component",
+            })
+            return self._make_result(frame_id, hold_bbox, pa, -1.0,
+                                     False, True, False, False,
+                                     "NO_COMPONENT_HOLD", "scene4_no_valid_component", dbg)
+
+    # =========================================================================
     #  State machine
     # =========================================================================
 
@@ -773,6 +926,20 @@ class Scene4FrameDiffTracker:
         kx, ky = self.kalman.predict()
         pred_cx, pred_cy = kx, ky
 
+        # ── Detection mode dispatch ──────────────────────────────────
+        detection_mode = self.cfg.get("scene4_detection_mode", "tracklet")
+
+        if detection_mode == "roi_largest_component":
+            # Simple mode: largest component in ROI around anchor
+            self._update_predicted_anchor(frame_id)
+            result = self._detect_roi_largest_component(sf, work, rs, frame_id)
+            self._prev_gray = sf.copy()
+            self._frame_count += 1
+            self._frames_since_init = (frame_id - self.init_frame_id
+                                       if self.init_frame_id >= 0 else 999)
+            return result
+
+        # ── Tracklet mode (original) ────────────────────────────────
         # ── Update predicted anchor (moves with phase) ───────────────
         self._update_predicted_anchor(frame_id)
 

@@ -128,6 +128,14 @@ DEBUG_CSV_FIELDS = [
     "scene4_best_tracklet_last_dist_to_predicted_anchor",
     # scene4 predicted anchor
     "scene4_predicted_anchor_x", "scene4_predicted_anchor_y",
+    # scene4 roi_largest_component
+    "scene4_component_count", "scene4_component_valid_count",
+    "scene4_component_best_area", "scene4_component_best_w",
+    "scene4_component_best_h", "scene4_component_best_x",
+    "scene4_component_best_y",
+    "scene4_component_reject_small_area_count",
+    "scene4_component_reject_large_area_count",
+    "scene4_component_reject_size_count",
     # scene4 phase
     "scene4_motion_phase", "scene4_phase_gate_pass",
     "scene4_phase_reject_flags",
