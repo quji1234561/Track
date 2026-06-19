@@ -93,8 +93,13 @@ DEBUG_CSV_FIELDS = [
     "candidate_x", "candidate_y",
     # scene2 recovery lock
     "scene2_post_occlusion_lock", "scene2_recovery_frame_count",
-    # scene4 motion-tracklet tracker
+    # scene4 motion-tracklet tracker — identity & position
     "scene4_state", "scene4_tracklet_count",
+    "scene4_best_tracklet_id",
+    "scene4_best_tracklet_start_frame", "scene4_best_tracklet_end_frame",
+    "scene4_best_tracklet_start_x", "scene4_best_tracklet_start_y",
+    "scene4_best_tracklet_last_x", "scene4_best_tracklet_last_y",
+    # scene4 tracklet scores
     "scene4_best_tracklet_age", "scene4_best_tracklet_score",
     "scene4_best_tracklet_area_score", "scene4_best_tracklet_energy_score",
     "scene4_best_tracklet_direction_score",
@@ -102,9 +107,22 @@ DEBUG_CSV_FIELDS = [
     "scene4_best_tracklet_anchor_score",
     "scene4_best_tracklet_template_score",
     "scene4_best_tracklet_net_displacement",
-    "scene4_best_tracklet_dist_anchor",
-    "scene4_tracklet_accept",
+    # scene4 distance diagnostics
+    "scene4_best_tracklet_dist_to_init_center",
+    "scene4_best_tracklet_dist_to_anchor",
+    "scene4_best_tracklet_dist_to_last_reliable",
+    "scene4_best_tracklet_start_dist_to_last_reliable",
+    "scene4_best_tracklet_last_dist_to_last_reliable",
+    "scene4_best_tracklet_start_dist_to_init_center",
+    "scene4_best_tracklet_last_dist_to_init_center",
+    # scene4 accept / reject
+    "scene4_tracklet_accept", "scene4_tracklet_accept_reason",
     "scene4_tracklet_reject_flags",
+    # scene4 center jump
+    "scene4_center_before_x", "scene4_center_before_y",
+    "scene4_center_after_x", "scene4_center_after_y",
+    "scene4_center_jump",
+    # scene4 state & source
     "scene4_reject_reason_top", "scene4_candidate_count",
     "scene4_raw_candidate_count", "scene4_center_source",
     "scene4_lost_count", "scene4_kalman_predict_count",
@@ -158,6 +176,13 @@ def _debug_row(result, frame_id):
             val = ""
         row[f] = val
     row["frame_id"] = frame_id
+
+    # ── Fallback: extract center_x / center_y from center tuple if not already set ──
+    if not row.get("center_x") and not row.get("center_y"):
+        c = result.get("center", None)
+        if c is not None and isinstance(c, (list, tuple)) and len(c) >= 2:
+            row["center_x"] = c[0]
+            row["center_y"] = c[1]
     return row
 
 

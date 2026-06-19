@@ -218,31 +218,18 @@ class Scene4FrameDiffTracker:
 
     def _init_locked_result(self, frame_id):
         """Build result dict for successful init (INIT_LOCKED state)."""
-        return {
-            "frame_id": frame_id, "bbox": self.bbox, "center": self.center,
-            "score": 1.0, "detected": True, "predicted": False,
-            "lost": False, "used_for_trajectory": True,
-            "template_id": _SENTINEL,
+        dbg = self._build_debug([], [])
+        dbg.update({
             "scene4_state": self.state,
-            "reject_reason": "scene4_manual_init_bbox" if self.cfg.get(
-                "scene4_use_manual_init_bbox") else "scene4_template_init_roi",
-            "scene4_tracklet_count": 0,
-            "scene4_best_tracklet_age": 0,
-            "scene4_best_tracklet_score": 0.0,
-            "scene4_best_tracklet_area_score": 0.0,
-            "scene4_best_tracklet_energy_score": 0.0,
-            "scene4_best_tracklet_direction_score": 0.0,
-            "scene4_best_tracklet_continuity_score": 0.0,
-            "scene4_best_tracklet_anchor_score": 0.0,
-            "scene4_best_tracklet_template_score": 0.0,
-            "scene4_best_tracklet_net_displacement": 0.0,
-            "scene4_best_tracklet_dist_anchor": 0.0,
-            "scene4_tracklet_accept": 0,
             "scene4_reject_reason_top": "",
-            "scene4_candidate_count": 0,
-            "scene4_raw_candidate_count": 0,
             "scene4_center_source": "init",
-        }
+        })
+        return self._make_result(
+            frame_id, self.bbox, self.center, 1.0,
+            True, False, False, True,
+            self.state,
+            "scene4_manual_init_bbox" if self.cfg.get("scene4_use_manual_init_bbox") else "scene4_template_init_roi",
+            dbg)
 
     def _update_template(self, gray_frame):
         """Save current crop as reliable template."""
@@ -759,6 +746,20 @@ class Scene4FrameDiffTracker:
         """Accept a reliable tracklet: update center, bbox, Kalman, anchor, motion stats."""
         new_center = tracklet["last_center"]
 
+        # ── Center jump diagnostics (before updating) ───────────────
+        before_center = self.center or self.last_reliable_center
+        if before_center is not None:
+            center_jump = _distance(before_center, new_center)
+        else:
+            center_jump = -1.0
+        dbg["scene4_center_before_x"] = int(before_center[0]) if before_center else 0
+        dbg["scene4_center_before_y"] = int(before_center[1]) if before_center else 0
+        dbg["scene4_center_after_x"] = int(new_center[0])
+        dbg["scene4_center_after_y"] = int(new_center[1])
+        dbg["scene4_center_jump"] = round(center_jump, 2)
+        dbg["scene4_tracklet_accept_reason"] = "passed_tracklet_gates"
+
+
         # Fixed bbox around new center
         fw, fh = self.fixed_box_w, self.fixed_box_h
         if fw <= 0 or fh <= 0:
@@ -977,10 +978,13 @@ class Scene4FrameDiffTracker:
                      detected, predicted, lost, used_for_trajectory,
                      state, reject_reason, extra_dbg=None):
         """Standardized result dict builder."""
+        valid_c = (center is not None and isinstance(center, (list, tuple)) and len(center) >= 2)
         result = {
             "frame_id": frame_id,
             "bbox": bbox,
             "center": center,
+            "center_x": center[0] if valid_c else "",
+            "center_y": center[1] if valid_c else "",
             "score": score,
             "detected": detected,
             "predicted": predicted,
@@ -1005,9 +1009,63 @@ class Scene4FrameDiffTracker:
             "scene4_reject_reason_top": "",
             "scene4_center_source": "none",
         }
+
+        # ── All best-tracklet fields (zeroed by default) ──────────
+        _zero_fields = [
+            # identity
+            "scene4_best_tracklet_id",
+            "scene4_best_tracklet_start_frame", "scene4_best_tracklet_end_frame",
+            # positions
+            "scene4_best_tracklet_start_x", "scene4_best_tracklet_start_y",
+            "scene4_best_tracklet_last_x", "scene4_best_tracklet_last_y",
+            # scores
+            "scene4_best_tracklet_age", "scene4_best_tracklet_score",
+            "scene4_best_tracklet_area_score", "scene4_best_tracklet_energy_score",
+            "scene4_best_tracklet_direction_score",
+            "scene4_best_tracklet_continuity_score",
+            "scene4_best_tracklet_anchor_score",
+            "scene4_best_tracklet_template_score",
+            "scene4_best_tracklet_net_displacement",
+            # distances
+            "scene4_best_tracklet_dist_to_init_center",
+            "scene4_best_tracklet_dist_to_anchor",
+            "scene4_best_tracklet_dist_to_last_reliable",
+            "scene4_best_tracklet_start_dist_to_last_reliable",
+            "scene4_best_tracklet_last_dist_to_last_reliable",
+            "scene4_best_tracklet_start_dist_to_init_center",
+            "scene4_best_tracklet_last_dist_to_init_center",
+            # accept / reject
+            "scene4_tracklet_accept", "scene4_tracklet_accept_reason",
+            "scene4_tracklet_reject_flags",
+        ]
+        for k in _zero_fields:
+            if k.endswith(("_x", "_y")) or k.endswith(("_frame", "_id")):
+                dbg[k] = 0
+            elif k in ("scene4_tracklet_accept_reason", "scene4_tracklet_reject_flags"):
+                dbg[k] = ""
+            else:
+                dbg[k] = 0.0
+
         if best:
+            trk = best["tracklet"]
+            centers = trk["centers"]
+            frames = trk["frames"]
+            start_c = centers[0] if centers else (0, 0)
+            last_c = centers[-1] if centers else (0, 0)
+            lrc = self.last_reliable_center
+            ic = self.init_center
+            anchor = lrc or ic
+
             dbg.update({
-                "scene4_best_tracklet_age": best["tracklet"]["age"],
+                "scene4_best_tracklet_id": trk["id"],
+                "scene4_best_tracklet_start_frame": int(frames[0]) if frames else 0,
+                "scene4_best_tracklet_end_frame": int(frames[-1]) if frames else 0,
+                "scene4_best_tracklet_start_x": int(start_c[0]),
+                "scene4_best_tracklet_start_y": int(start_c[1]),
+                "scene4_best_tracklet_last_x": int(last_c[0]),
+                "scene4_best_tracklet_last_y": int(last_c[1]),
+                # scores
+                "scene4_best_tracklet_age": trk["age"],
                 "scene4_best_tracklet_score": round(best["total_score"], 4),
                 "scene4_best_tracklet_area_score": round(best["area_score"], 4),
                 "scene4_best_tracklet_energy_score": round(best["energy_score"], 4),
@@ -1016,18 +1074,17 @@ class Scene4FrameDiffTracker:
                 "scene4_best_tracklet_anchor_score": round(best["anchor_score"], 4),
                 "scene4_best_tracklet_template_score": round(best["template_score"], 4),
                 "scene4_best_tracklet_net_displacement": round(best["net_displacement"], 2),
-                "scene4_best_tracklet_dist_anchor": round(best["dist_anchor"], 2),
+                # distance diagnostics
+                "scene4_best_tracklet_dist_to_init_center": round(_distance(last_c, ic), 2) if ic else -1.0,
+                "scene4_best_tracklet_dist_to_anchor": round(best["dist_anchor"], 2),
+                "scene4_best_tracklet_dist_to_last_reliable": round(_distance(last_c, lrc), 2) if lrc else -1.0,
+                "scene4_best_tracklet_start_dist_to_last_reliable": round(_distance(start_c, lrc), 2) if lrc else -1.0,
+                "scene4_best_tracklet_last_dist_to_last_reliable": round(_distance(last_c, lrc), 2) if lrc else -1.0,
+                "scene4_best_tracklet_start_dist_to_init_center": round(_distance(start_c, ic), 2) if ic else -1.0,
+                "scene4_best_tracklet_last_dist_to_init_center": round(_distance(last_c, ic), 2) if ic else -1.0,
+                # accept / reject
                 "scene4_tracklet_accept": 1 if best["_accept"] else 0,
+                "scene4_tracklet_accept_reason": "passed_tracklet_gates" if best["_accept"] else "",
                 "scene4_tracklet_reject_flags": "|".join(best["_reject_flags"]) if best["_reject_flags"] else "",
             })
-        else:
-            for k in ["scene4_best_tracklet_age", "scene4_best_tracklet_score",
-                       "scene4_best_tracklet_area_score", "scene4_best_tracklet_energy_score",
-                       "scene4_best_tracklet_direction_score",
-                       "scene4_best_tracklet_continuity_score",
-                       "scene4_best_tracklet_anchor_score",
-                       "scene4_best_tracklet_template_score",
-                       "scene4_best_tracklet_net_displacement",
-                       "scene4_best_tracklet_dist_anchor", "scene4_tracklet_accept"]:
-                dbg[k] = 0 if "age" not in k else 0
         return dbg
