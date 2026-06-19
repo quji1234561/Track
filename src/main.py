@@ -117,6 +117,15 @@ DEBUG_CSV_FIELDS = [
     "scene4_best_tracklet_last_dist_to_init_center",
     "scene4_best_tracklet_center_jump",
     "scene4_best_tracklet_start_dist_to_lrc",
+    "scene4_best_tracklet_dx_to_last_reliable",
+    "scene4_best_tracklet_dy_to_last_reliable",
+    "scene4_best_tracklet_abs_dx_to_last_reliable",
+    "scene4_best_tracklet_abs_dy_to_last_reliable",
+    "scene4_best_tracklet_start_dx_to_last_reliable",
+    "scene4_best_tracklet_start_dy_to_last_reliable",
+    # scene4 phase
+    "scene4_motion_phase", "scene4_phase_gate_pass",
+    "scene4_phase_reject_flags",
     # scene4 accept / reject
     "scene4_tracklet_accept", "scene4_tracklet_accept_reason",
     "scene4_tracklet_reject_flags",

@@ -445,6 +445,33 @@ SCENES = {
         "scene4_tracklet_max_dist_anchor_after_stable": 90,  # 稳定期后放宽
         "scene4_tracklet_max_center_jump": 45,        # tracklet 接管最大中心跳变(px)
         "scene4_tracklet_max_start_dist_to_last_reliable": 50,  # tracklet 起点距锚点最大距离(px)
+        # --- 分段运动先验 ---
+        "scene4_use_phase_motion_prior": True,        # 启用分段运动先验
+        "scene4_rise_frame_range": [1, 15],           # 上升帧段
+        "scene4_hover_frame_range": [16, 31],         # 悬停帧段
+        "scene4_descend_start_frame": 32,             # 下降开始帧
+        "scene4_rise_expected_dy_sign": -1,           # 上升：dy<0（图像坐标中y减小=上升）
+        "scene4_descend_expected_dy_sign": 1,         # 下降：dy>0
+        # 运动位移限制
+        "scene4_max_dx_per_frame": 25,                # 每帧最大横向位移(px)
+        "scene4_max_dy_per_frame": 35,                # 每帧最大纵向位移(px)
+        "scene4_stabilize_max_dx": 35,                # 稳定期最大横向位移
+        "scene4_stabilize_max_dy": 45,                # 稳定期最大纵向位移
+        "scene4_hover_max_dx": 12,                    # 悬停期最大横向位移
+        "scene4_hover_max_dy": 12,                    # 悬停期最大纵向位移
+        # tracklet 起点限制
+        "scene4_tracklet_max_start_dx_to_last_reliable": 35,
+        "scene4_tracklet_max_start_dy_to_last_reliable": 45,
+        # 阶段锚点偏移限制
+        "scene4_rise_max_dx_from_anchor": 60,
+        "scene4_rise_max_upward_dy_from_anchor": 120,
+        "scene4_hover_max_dx_from_anchor": 35,
+        "scene4_hover_max_dy_from_anchor": 35,
+        "scene4_descend_max_dx_from_anchor": 80,
+        "scene4_descend_max_downward_dy_from_anchor": 180,
+        # 阶段 fallback 步长
+        "scene4_rise_hold_step_y": -3,                # 上升期无观测时 y 步长
+        "scene4_descend_hold_step_y": 3,              # 下降期无观测时 y 步长
         # --- Tracklet 数量控制 ---
         "scene4_max_tracklets": 80,                   # 最大保留 tracklet 数
         "scene4_tracklet_prune_by_anchor_radius": 220, # 超出此半径的 tracklet 删除
