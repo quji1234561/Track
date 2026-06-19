@@ -413,7 +413,29 @@ class Scene4FrameDiffTracker:
             if trk["missed"] <= max_missed
         ]
 
+        # ── Prune: remove far-away tracklets and limit total count ──
+        self._prune_tracklets()
+
         self._debug_tracklets = list(self.motion_tracklets)
+
+    def _prune_tracklets(self):
+        """Remove tracklets far from anchor and limit total count."""
+        anchor = self.last_reliable_center or self.anchor_center
+        if anchor is None:
+            return
+        prune_radius = self.cfg.get("scene4_tracklet_prune_by_anchor_radius", 220)
+        max_tracklets = self.cfg.get("scene4_max_tracklets", 80)
+
+        # Drop tracklets whose last_center is too far from anchor
+        self.motion_tracklets = [
+            trk for trk in self.motion_tracklets
+            if _distance(trk["last_center"], anchor) <= prune_radius
+        ]
+
+        # If still too many, keep the top N by age (oldest = most consistent)
+        if len(self.motion_tracklets) > max_tracklets:
+            self.motion_tracklets.sort(key=lambda trk: trk["age"], reverse=True)
+            self.motion_tracklets = self.motion_tracklets[:max_tracklets]
 
     # =========================================================================
     #  Tracklet scoring
@@ -513,6 +535,42 @@ class Scene4FrameDiffTracker:
             if dist_anchor > reacq_radius:
                 reject_flags.append(f"dist({dist_anchor:.0f}>{reacq_radius})")
 
+            # ── Hard spatial gates (take precedence over scores) ────
+            lrc = self.last_reliable_center
+            start_c = centers[0] if len(centers) > 0 else None
+            last_c_from_centers = centers[-1] if len(centers) > 0 else None
+            start_dist_to_lrc = -1.0
+            center_jump = -1.0
+
+            # Stabilize period uses stricter thresholds
+            frames_since_init = frame_id - self.init_frame_id if self.init_frame_id >= 0 else 999
+            stabilize_frames = self.cfg.get("scene4_stabilize_frames", 30)
+            if frames_since_init <= stabilize_frames:
+                max_dist_anchor = self.cfg.get("scene4_stabilize_max_dist_anchor", 45)
+                max_center_jump = self.cfg.get("scene4_stabilize_max_center_jump", 35)
+            else:
+                max_dist_anchor = self.cfg.get("scene4_tracklet_max_dist_anchor", 60)
+                max_center_jump = self.cfg.get("scene4_tracklet_max_center_jump", 45)
+
+            if dist_anchor > max_dist_anchor:
+                reject_flags.append(f"too_far_from_anchor({dist_anchor:.0f}>{max_dist_anchor})")
+
+            # Tracklet start must be near last_reliable_center
+            max_start_dist = self.cfg.get("scene4_tracklet_max_start_dist_to_last_reliable", 50)
+            if start_c and lrc:
+                start_dist_to_lrc = _distance(start_c, lrc)
+                if start_dist_to_lrc > max_start_dist:
+                    reject_flags.append(
+                        f"tracklet_start_not_near_target({start_dist_to_lrc:.0f}>{max_start_dist})")
+
+            # Center jump: tracklet last_center must not be too far from current target
+            before_center = self.center or self.last_reliable_center
+            if before_center and last_c_from_centers:
+                center_jump = _distance(last_c_from_centers, before_center)
+                if center_jump > max_center_jump:
+                    reject_flags.append(
+                        f"center_jump_too_large({center_jump:.0f}>{max_center_jump})")
+
             accept = len(reject_flags) == 0
 
             scored.append({
@@ -528,6 +586,8 @@ class Scene4FrameDiffTracker:
                 "dist_anchor": dist_anchor,
                 "mean_area": mean_area,
                 "mean_energy": mean_energy,
+                "center_jump": center_jump,
+                "start_dist_to_lrc": start_dist_to_lrc,
                 "_accept": accept,
                 "_reject_flags": reject_flags,
             })
@@ -1062,6 +1122,8 @@ class Scene4FrameDiffTracker:
             "scene4_best_tracklet_last_dist_to_last_reliable",
             "scene4_best_tracklet_start_dist_to_init_center",
             "scene4_best_tracklet_last_dist_to_init_center",
+            "scene4_best_tracklet_center_jump",
+            "scene4_best_tracklet_start_dist_to_lrc",
         ]
         _count_fields = [
             "scene4_best_tracklet_id",
@@ -1124,6 +1186,8 @@ class Scene4FrameDiffTracker:
                 "scene4_best_tracklet_last_dist_to_last_reliable": _safe_dist(last_c, lrc),
                 "scene4_best_tracklet_start_dist_to_init_center": _safe_dist(start_c, ic),
                 "scene4_best_tracklet_last_dist_to_init_center": _safe_dist(last_c, ic),
+                "scene4_best_tracklet_center_jump": _safe_num(best.get("center_jump"), -1.0),
+                "scene4_best_tracklet_start_dist_to_lrc": _safe_num(best.get("start_dist_to_lrc"), -1.0),
                 # accept / reject
                 "scene4_tracklet_accept": 1 if best["_accept"] else 0,
                 "scene4_tracklet_accept_reason": "passed_tracklet_gates" if best["_accept"] else "",

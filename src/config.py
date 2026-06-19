@@ -436,6 +436,18 @@ SCENES = {
         "scene4_init_lock_radius": 80,                # INIT_LOCKED 期允许的最大中心偏移(px)
         "scene4_max_kalman_predict": 20,              # 最大连续 Kalman 预测帧数→LOST
         "scene4_max_reacquire_frames": 15,            # 最大连续 REACQUIRE 帧数→KALMAN_PREDICT
+        # --- 稳定期严格门控 ---
+        "scene4_stabilize_frames": 30,                # 初始化后稳定期帧数
+        "scene4_stabilize_max_dist_anchor": 45,       # 稳定期最大锚点距离(px)
+        "scene4_stabilize_max_center_jump": 35,       # 稳定期最大中心跳变(px)
+        # --- 硬空间门控 ---
+        "scene4_tracklet_max_dist_anchor": 60,        # tracklet 接管最大锚点距离(px)
+        "scene4_tracklet_max_dist_anchor_after_stable": 90,  # 稳定期后放宽
+        "scene4_tracklet_max_center_jump": 45,        # tracklet 接管最大中心跳变(px)
+        "scene4_tracklet_max_start_dist_to_last_reliable": 50,  # tracklet 起点距锚点最大距离(px)
+        # --- Tracklet 数量控制 ---
+        "scene4_max_tracklets": 80,                   # 最大保留 tracklet 数
+        "scene4_tracklet_prune_by_anchor_radius": 220, # 超出此半径的 tracklet 删除
         # --- 帧差提取 ---
         "scene4_diff_method": "two_frame",
         "scene4_diff_threshold": 3,

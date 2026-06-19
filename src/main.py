@@ -115,6 +115,8 @@ DEBUG_CSV_FIELDS = [
     "scene4_best_tracklet_last_dist_to_last_reliable",
     "scene4_best_tracklet_start_dist_to_init_center",
     "scene4_best_tracklet_last_dist_to_init_center",
+    "scene4_best_tracklet_center_jump",
+    "scene4_best_tracklet_start_dist_to_lrc",
     # scene4 accept / reject
     "scene4_tracklet_accept", "scene4_tracklet_accept_reason",
     "scene4_tracklet_reject_flags",
@@ -201,12 +203,16 @@ def _debug_row(result, frame_id):
         row[f] = val
     row["frame_id"] = frame_id
 
-    # ── Fallback: extract center_x / center_y from center tuple, but only if truly absent ──
-    if row.get("center_x") in ("", None) and row.get("center_y") in ("", None):
-        c = result.get("center", None)
-        if c is not None and isinstance(c, (list, tuple)) and len(c) >= 2:
-            row["center_x"] = c[0]
-            row["center_y"] = c[1]
+    # ── Ensure center_x / center_y are always extracted from center tuple ──
+    center = result.get("center", None)
+    if (isinstance(center, (list, tuple))
+            and len(center) >= 2
+            and center[0] is not None
+            and center[1] is not None):
+        if row.get("center_x", "") in ("", None):
+            row["center_x"] = center[0]
+        if row.get("center_y", "") in ("", None):
+            row["center_y"] = center[1]
     return row
 
 

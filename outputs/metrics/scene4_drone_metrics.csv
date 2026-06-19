@@ -1,2 +1,2 @@
 scene,total_frames,detected_frames,predicted_frames,lost_frames,detection_rate,prediction_rate,average_score,average_fps
-地面光学站跟踪无人机,8,6,2,0,0.75,0.25,0.759779505351949,0.17879026948004778
+地面光学站跟踪无人机,8,2,6,0,0.25,0.75,0.7744840612416808,0.930624080055383
