@@ -817,6 +817,7 @@ class Scene4FrameDiffTracker:
         # ── Filter & pick largest ────────────────────────────────────
         best = None
         best_area = 0
+        candidate_boxes_orig = []  # all valid candidates in original coords
         for i in range(1, nl):
             x, y, w, h, area = stats[i]
             if area < min_a:
@@ -828,12 +829,24 @@ class Scene4FrameDiffTracker:
             if w < min_w or h < min_h or w > max_w or h > max_h:
                 dbg["scene4_component_reject_size_count"] += 1
                 continue
+            # Store candidate box in original coords for debug drawing
+            box_o = [int((rx1 + x) / rs), int((ry1 + y) / rs),
+                     int(w / rs), int(h / rs)]
+            candidate_boxes_orig.append(box_o)
             if area > best_area:
                 best_area = area
                 cx_s, cy_s = centroids[i]
                 best = (i, x, y, w, h, area, cx_s, cy_s)
 
-        dbg["scene4_component_valid_count"] = 1 if best else 0
+        # Store debug boxes for main.py to draw
+        dbg["scene4_debug_candidate_boxes"] = candidate_boxes_orig
+        dbg["scene4_debug_pred_bbox"] = None
+        dbg["scene4_debug_best_box"] = None
+        dbg["scene4_debug_roi"] = [int(rx1 / rs), int(ry1 / rs),
+                                   int((rx2 - rx1) / rs), int((ry2 - ry1) / rs)]
+        dbg["scene4_debug_anchor"] = list(anchor) if anchor else None
+
+        dbg["scene4_component_valid_count"] = len(candidate_boxes_orig)
         if best:
             dbg["scene4_component_best_area"] = best_area
             dbg["scene4_component_best_w"] = best[3]
@@ -857,6 +870,12 @@ class Scene4FrameDiffTracker:
             if fw <= 0:
                 fw, fh = bw_o, bh_o
             bbox_o = [int(cx_o - fw // 2), int(cy_o - fh // 2), fw, fh]
+
+            # Debug boxes for main.py drawing
+            best_box_orig = [bx_o, by_o, bw_o, bh_o]
+            dbg["scene4_debug_best_box"] = best_box_orig
+            pred_box = [int(cx_o - fw // 2), int(cy_o - fh // 2), fw, fh]
+            dbg["scene4_debug_pred_bbox"] = pred_box
 
             # Update state
             self.center = (cx_o, cy_o)
@@ -886,6 +905,7 @@ class Scene4FrameDiffTracker:
             self.center = pa
             self.bbox = hold_bbox
             self.state = "NO_COMPONENT_HOLD"
+            dbg["scene4_debug_pred_bbox"] = list(hold_bbox)
 
             dbg.update({
                 "scene4_state": "NO_COMPONENT_HOLD",

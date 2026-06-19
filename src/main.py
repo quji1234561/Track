@@ -238,6 +238,83 @@ def _debug_row(result, frame_id):
     return row
 
 
+# Scene4 diff debug writer state (module-level so it persists across frames)
+_scene4_debug_vw = None
+
+
+def _write_scene4_diff_debug(result, frame, prefix, frame_w, frame_h, fps):
+    """If result has scene4 component debug boxes, draw them on a copy and
+    write to a separate debug video. Uses same codec as tracking video."""
+    global _scene4_debug_vw
+    if prefix != "scene4_drone":
+        return
+    boxes = result.get("scene4_debug_candidate_boxes", None)
+    pred_bbox = result.get("scene4_debug_pred_bbox", None)
+    best_box = result.get("scene4_debug_best_box", None)
+    roi = result.get("scene4_debug_roi", None)
+    if boxes is None and pred_bbox is None:
+        return
+
+    try:
+        # Lazy-init writer at half resolution for reliable encoding
+        if _scene4_debug_vw is None:
+            dw, dh = frame_w // 2, frame_h // 2
+            path = str(OUTPUT_SUBDIRS["videos"] / "scene4_drone_diff_debug.avi")
+            fourcc = cv2.VideoWriter_fourcc(*"XVID")
+            _scene4_debug_vw = cv2.VideoWriter(path, fourcc, fps, (dw, dh))
+            if _scene4_debug_vw.isOpened():
+                print(f"  [Scene4] Diff debug video: {path} ({dw}x{dh})")
+            else:
+                _scene4_debug_vw = None
+                return
+
+        if _scene4_debug_vw is None or not _scene4_debug_vw.isOpened():
+            return
+
+        # Draw on a copy of the original color frame
+        vis = frame.copy()
+        dw, dh = frame_w // 2, frame_h // 2
+
+        # Yellow dashed ROI rectangle
+        if roi is not None:
+            rx, ry, rw, rh = [int(v) for v in roi]
+            cv2.rectangle(vis, (rx, ry), (rx + rw, ry + rh), (0, 255, 255), 1)
+
+        # Blue thin: all valid candidate boxes
+        if boxes:
+            for box in boxes:
+                x, y, w, h = [max(0, int(v)) for v in box]
+                cv2.rectangle(vis, (x, y), (x + w, y + h), (255, 0, 0), 1)
+
+        # Blue thick: best component box
+        if best_box is not None:
+            x, y, w, h = [max(0, int(v)) for v in best_box]
+            cv2.rectangle(vis, (x, y), (x + w, y + h), (255, 0, 0), 2)
+            cv2.putText(vis, "best", (x, max(0, y - 5)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1, cv2.LINE_AA)
+
+        # Red: predicted anchor bbox
+        if pred_bbox is not None:
+            x, y, w, h = [max(0, int(v)) for v in pred_bbox]
+            cv2.rectangle(vis, (x, y), (x + w, y + h), (0, 0, 255), 2)
+            cv2.putText(vis, "pred", (x, max(0, y - 5)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
+
+        # Info overlay
+        src = result.get("scene4_center_source", "")
+        cnt = result.get("scene4_component_count", 0)
+        vcnt = result.get("scene4_component_valid_count", 0)
+        area = result.get("scene4_component_best_area", 0)
+        cv2.putText(vis, f"comp:{cnt} valid:{vcnt} area:{area} src:{src}",
+                    (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
+
+        # Resize and write
+        vis_small = cv2.resize(vis, (dw, dh))
+        _scene4_debug_vw.write(vis_small)
+    except Exception:
+        pass
+
+
 def run_scene(scene_key, args):
     """Run tracking for a single scene."""
     cfg = get_scene_config(scene_key)
@@ -471,6 +548,9 @@ def run_scene(scene_key, args):
                              draw_predicted_trajectory=scene_draw_traj)
         out_writer.write(vis_frame)
 
+        # ── Scene4 diff debug video (blue=candidates, red=pred, separate from tracking) ──
+        _write_scene4_diff_debug(result, frame, prefix, frame_w, frame_h, fps)
+
         # Keyframes at intervals (not every frame)
         if save_frames:
             interval = max(1, total_frames // 5)
@@ -493,6 +573,12 @@ def run_scene(scene_key, args):
 
     # --- Scale usage statistics ---
     tracker.print_scale_stats()
+
+    # --- Release scene4 diff debug writer ---
+    global _scene4_debug_vw
+    if _scene4_debug_vw is not None:
+        _scene4_debug_vw.release()
+        _scene4_debug_vw = None
 
     # --- Save debug CSV (every frame) ---
     debug_csv_path = DEBUG_DIR / f"{prefix}_score_debug.csv"
