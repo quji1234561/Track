@@ -242,6 +242,19 @@ def _debug_row(result, frame_id):
 _scene4_debug_vw = None
 
 
+def _put_label(img, text, org, color, scale=0.45, thickness=1):
+    """Draw text with black shadow for readability."""
+    x, y = int(org[0]), max(12, int(org[1]))
+    # shadow
+    cv2.putText(img, text, (x + 1, y + 1),
+                cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0),
+                thickness + 1, cv2.LINE_AA)
+    # colored foreground
+    cv2.putText(img, text, (x, y),
+                cv2.FONT_HERSHEY_SIMPLEX, scale, color,
+                thickness, cv2.LINE_AA)
+
+
 def _write_scene4_diff_debug(result, frame, prefix, frame_w, frame_h, fps):
     """If result has scene4 component debug boxes, draw them on a copy and
     write to a separate debug video. Uses same codec as tracking video."""
@@ -274,39 +287,48 @@ def _write_scene4_diff_debug(result, frame, prefix, frame_w, frame_h, fps):
         # Draw on a copy of the original color frame
         vis = frame.copy()
         dw, dh = frame_w // 2, frame_h // 2
+        BLUE = (255, 0, 0)
+        RED = (0, 0, 255)
+        YELLOW = (0, 255, 255)
 
-        # Yellow dashed ROI rectangle
+        # ── Yellow: ROI search rectangle ───────────────────────────
         if roi is not None:
             rx, ry, rw, rh = [int(v) for v in roi]
-            cv2.rectangle(vis, (rx, ry), (rx + rw, ry + rh), (0, 255, 255), 1)
+            cv2.rectangle(vis, (rx, ry), (rx + rw, ry + rh), YELLOW, 1)
+            label_y = ry - 6 if ry > 18 else ry + rh + 14
+            _put_label(vis, f"ROI {rw}x{rh}", (rx, label_y), YELLOW, scale=0.5, thickness=1)
 
-        # Blue thin: all valid candidate boxes
+        # ── Blue thin: candidate component boxes ───────────────────
         if boxes:
-            for box in boxes:
+            max_label = 20  # limit labels to avoid clutter
+            for i, box in enumerate(boxes):
                 x, y, w, h = [max(0, int(v)) for v in box]
-                cv2.rectangle(vis, (x, y), (x + w, y + h), (255, 0, 0), 1)
+                cv2.rectangle(vis, (x, y), (x + w, y + h), BLUE, 1)
+                if i < max_label:
+                    label_y = y - 4 if y > 14 else y + h + 12
+                    _put_label(vis, f"{w}x{h}", (x, label_y), BLUE)
 
-        # Blue thick: best component box
+        # ── Blue thick: best component box ─────────────────────────
         if best_box is not None:
             x, y, w, h = [max(0, int(v)) for v in best_box]
-            cv2.rectangle(vis, (x, y), (x + w, y + h), (255, 0, 0), 2)
-            cv2.putText(vis, "best", (x, max(0, y - 5)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1, cv2.LINE_AA)
+            cv2.rectangle(vis, (x, y), (x + w, y + h), BLUE, 2)
+            label_y = y - 6 if y > 18 else y + h + 14
+            _put_label(vis, f"best {w}x{h}", (x, label_y), BLUE, scale=0.5, thickness=1)
 
-        # Red: predicted anchor bbox
+        # ── Red: predicted anchor bbox ─────────────────────────────
         if pred_bbox is not None:
             x, y, w, h = [max(0, int(v)) for v in pred_bbox]
-            cv2.rectangle(vis, (x, y), (x + w, y + h), (0, 0, 255), 2)
-            cv2.putText(vis, "pred", (x, max(0, y - 5)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
+            cv2.rectangle(vis, (x, y), (x + w, y + h), RED, 2)
+            label_y = y - 6 if y > 18 else y + h + 14
+            _put_label(vis, f"pred {w}x{h}", (x, label_y), RED, scale=0.5, thickness=1)
 
-        # Info overlay
+        # ── Info overlay: top-left ─────────────────────────────────
         src = result.get("scene4_center_source", "")
         cnt = result.get("scene4_component_count", 0)
         vcnt = result.get("scene4_component_valid_count", 0)
         area = result.get("scene4_component_best_area", 0)
-        cv2.putText(vis, f"comp:{cnt} valid:{vcnt} area:{area} src:{src}",
-                    (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
+        _put_label(vis, f"comp:{cnt} valid:{vcnt} area:{area} src:{src}",
+                   (10, 25), YELLOW, scale=0.5, thickness=1)
 
         # Resize and write
         vis_small = cv2.resize(vis, (dw, dh))

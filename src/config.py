@@ -380,7 +380,7 @@ SCENES = {
         "max_motion_distance": 300,   # 允许离预测点的最大距离(px)
         "ncc_step": 3,                # 滑窗步长
         "resize_scale": 0.5,          # 帧缩放（2448×2048→1224×1024, 像素量降至 1/4）
-        "tracking_stop_frame": 230,   # 超过此帧号后隐藏轨迹(避免树林误框), None=不隐藏
+        "tracking_stop_frame": None,   # 超过此帧号后隐藏轨迹(避免树林误框), None=不隐藏
         # --- 可视化 ---
         "show_predicted_bbox": False,
         "draw_predicted_trajectory": False,
@@ -483,11 +483,11 @@ SCENES = {
         # --- 检测模式 ---
         "scene4_detection_mode": "roi_largest_component",  # "tracklet" or "roi_largest_component"
         # --- roi_largest_component 模式参数 ---
-        "scene4_roi_component_search_radius": 80,    # ROI 搜索半径(px, 原图坐标)
+        "scene4_roi_component_search_radius": 105,    # ROI 搜索半径(px, 原图坐标)
         "scene4_component_min_area": 20,               # 最小连通域面积(scaled frame)
         "scene4_component_max_area": 800,             # 最大连通域面积
-        "scene4_component_min_width": 6,              # 最小宽度
-        "scene4_component_min_height": 3,             # 最小高度
+        "scene4_component_min_width": 35,              # 最小宽度
+        "scene4_component_min_height": 8,             # 最小高度
         "scene4_component_max_width": 80,             # 最大宽度
         "scene4_component_max_height": 80,            # 最大高度
         "scene4_component_morph_kernel": 3,           # 形态学核大小
