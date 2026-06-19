@@ -128,6 +128,10 @@ DEBUG_CSV_FIELDS = [
     "scene4_best_tracklet_last_dist_to_predicted_anchor",
     # scene4 predicted anchor
     "scene4_predicted_anchor_x", "scene4_predicted_anchor_y",
+    # scene4 nearest_motion_contour
+    "scene4_nearest_contour_count", "scene4_nearest_contour_valid_count",
+    "scene4_nearest_contour_best_area", "scene4_nearest_contour_best_dist",
+    "scene4_nearest_contour_search_window", "scene4_nearest_contour_selected_by",
     # scene4 roi_largest_component
     "scene4_component_count", "scene4_component_valid_count",
     "scene4_component_best_area", "scene4_component_best_w",
@@ -502,7 +506,19 @@ def run_scene(scene_key, args):
             continue
 
         gray = preprocess_frame(frame)
-        result = tracker.track_frame(gray, frame_id)
+
+        # Scene4 interactive mode (independent of detection_mode)
+        if (scene_key == "scene4_drone"
+                and cfg.get("scene4_interactive", False)
+                and hasattr(tracker, "track_frame_interactive")):
+            result = tracker.track_frame_interactive(gray, frame, frame_id)
+        else:
+            result = tracker.track_frame(gray, frame_id)
+
+        # Handle user quit from interactive mode
+        if result and result.get("_user_quit"):
+            print("  User quit interactive mode.")
+            break
 
         if result is None:
             result = {
@@ -601,6 +617,11 @@ def run_scene(scene_key, args):
     if _scene4_debug_vw is not None:
         _scene4_debug_vw.release()
         _scene4_debug_vw = None
+
+    # --- Cleanup interactive window ---
+    cv2.destroyWindow("Scene4 Interactive")
+    for _ in range(3):
+        cv2.waitKey(1)
 
     # --- Save debug CSV (every frame) ---
     debug_csv_path = DEBUG_DIR / f"{prefix}_score_debug.csv"

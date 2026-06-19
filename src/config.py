@@ -481,13 +481,23 @@ SCENES = {
         "scene4_max_tracklets": 80,                   # 最大保留 tracklet 数
         "scene4_tracklet_prune_by_anchor_radius": 220, # 超出此半径的 tracklet 删除
         # --- 检测模式 ---
-        "scene4_detection_mode": "roi_largest_component",  # "tracklet" or "roi_largest_component"
+        "scene4_interactive": True,              # 独立交互开关：暂停/框选，不依赖 detection_mode
+        "scene4_detection_mode": "roi_largest_component",  # "tracklet" / "roi_largest_component" / "nearest_motion_contour" / "nearest_motion_contour_interactive"
+        # --- nearest_motion_contour 模式参数 ---
+        "scene4_diff_threshold": 30,              # 帧差二值化阈值
+        "scene4_blur_kernel": 5,                  # 高斯模糊核(奇数)
+        "scene4_morph_kernel": 5,                 # 形态学开闭核
+        "scene4_search_window": 150,              # 最近轮廓搜索范围(px)
+        "scene4_min_motion_area": 100,            # 最小运动轮廓面积
+        "scene4_smooth_factor": 0.7,              # 中心平滑因子(old*0.7 + new*0.3)
+        "scene4_max_trajectory_points": 2000,     # 轨迹点上限
+        "scene4_use_kalman_fallback": False,      # 禁用 Kalman 外推
         # --- roi_largest_component 模式参数 ---
-        "scene4_roi_component_search_radius": 200,    # ROI 搜索半径(px, 原图坐标)
+        "scene4_roi_component_search_radius": 150,    # ROI 搜索半径(px, 原图坐标)
         "scene4_component_min_area": 200,               # 最小连通域面积(scaled frame)
         "scene4_component_max_area": 1000,             # 最大连通域面积
-        "scene4_component_min_width": 20,              # 最小宽度
-        "scene4_component_min_height": 10,             # 最小高度
+        "scene4_component_min_width": 50,              # 最小宽度
+        "scene4_component_min_height": 20,             # 最小高度
         "scene4_component_max_width": 200,             # 最大宽度
         "scene4_component_max_height": 200,            # 最大高度
         "scene4_component_morph_kernel": 3,           # 形态学核大小

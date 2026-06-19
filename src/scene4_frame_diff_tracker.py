@@ -109,6 +109,7 @@ class Scene4FrameDiffTracker:
         # Frame buffers
         self._prev_gray = None
         self._prev_frame_gray_full = None  # full-res for candidate extraction
+        self.scene4_prev_gray = None       # nearest_motion_contour mode
         self._frame_count = 0
         self._frames_since_init = 0
 
@@ -129,6 +130,14 @@ class Scene4FrameDiffTracker:
         self._debug_vw = None
         self._debug_candidates = []
         self._debug_tracklets = []
+
+        # Interactive mode
+        self._paused = False
+        self._dragging = False
+        self._drag_start = (0, 0)
+        self._drag_end = (0, 0)
+        self._manual_bbox = None
+        self._mouse_set = False
 
         # main.py compat
         self._last_all_scores = []
@@ -744,6 +753,321 @@ class Scene4FrameDiffTracker:
             return 0.4
 
     # =========================================================================
+    # =========================================================================
+    #  Nearest motion contour detection
+    # =========================================================================
+
+    def _detect_nearest_motion_contour(self, gray_frame, frame_id):
+        """Frame-diff → threshold → morph → contours → nearest to prev center.
+
+        Works on FULL-RES frame (matching classmate's video4.py algorithm).
+        No Kalman, no phase prior, no coordinate scaling confusion.
+        On failure: hold at last position, don't extrapolate.
+        """
+        blur_k = self.cfg.get("scene4_blur_kernel", 5)
+        if blur_k % 2 == 0:
+            blur_k += 1
+        morph_k = self.cfg.get("scene4_morph_kernel", 5)
+        if morph_k % 2 == 0:
+            morph_k += 1
+        diff_thr = self.cfg.get("scene4_diff_threshold", 30)
+        min_area = self.cfg.get("scene4_min_motion_area", 100)
+        search_win = self.cfg.get("scene4_search_window", 150)
+        smooth = self.cfg.get("scene4_smooth_factor", 0.7)
+
+        prev_center = self.last_reliable_center or self.center
+        fw, fh = self.fixed_box_w, self.fixed_box_h
+        if fw <= 0:
+            fw, fh = 60, 30
+
+        dbg = {
+            "scene4_nearest_contour_count": 0,
+            "scene4_nearest_contour_valid_count": 0,
+            "scene4_nearest_contour_best_area": 0,
+            "scene4_nearest_contour_best_dist": 0,
+            "scene4_nearest_contour_search_window": search_win,
+            "scene4_nearest_contour_selected_by": "none",
+            "scene4_motion_phase": "NONE",
+            "scene4_predicted_anchor_x": _safe_coord(prev_center, 0),
+            "scene4_predicted_anchor_y": _safe_coord(prev_center, 1),
+        }
+
+        # ── Full-res grayscale + blur (matching classmate's video4.py) ──
+        gray = _to_255(gray_frame)
+        gray = cv2.GaussianBlur(gray, (blur_k, blur_k), 0)
+
+        if self.scene4_prev_gray is None:
+            self.scene4_prev_gray = gray.copy()
+            return self._make_result(frame_id, self.bbox, self.center, -1.0,
+                                     False, True, False, False,
+                                     "NO_MOTION_HOLD", "scene4_no_prev_frame", dbg)
+
+        # ── Frame diff + threshold ──────────────────────────────────
+        diff = cv2.absdiff(gray, self.scene4_prev_gray)
+        _, mask = cv2.threshold(diff, diff_thr, 255, cv2.THRESH_BINARY)
+        mask = mask.astype(np.uint8)
+        self.scene4_prev_gray = gray.copy()
+
+        # ── Morphology: open then close ─────────────────────────────
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (morph_k, morph_k))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+        # ── Find contours (all in full-res coords, no scaling) ──────
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # ── Filter by area ──────────────────────────────────────────
+        valid = []
+        candidate_boxes = []
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area < min_area:
+                continue
+            M = cv2.moments(cnt)
+            if M["m00"] == 0:
+                continue
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
+            bx, by, bw, bh = cv2.boundingRect(cnt)
+            # All coords already in full-res original frame
+            valid.append({"center": (cx, cy), "area": area,
+                          "bbox": [bx, by, bw, bh]})
+            candidate_boxes.append([bx, by, bw, bh])
+
+        dbg["scene4_nearest_contour_count"] = len(valid)
+        dbg["scene4_debug_candidate_boxes"] = candidate_boxes
+
+        # ── Selection: nearest to prev_center, fallback to largest (matching video4.py) ──
+        best = None
+        if prev_center and valid:
+            # Try nearest within search window
+            best_dist = search_win
+            for c in valid:
+                d = _distance(c["center"], prev_center)
+                if d < best_dist:
+                    best_dist = d
+                    best = c
+            if best:
+                dbg["scene4_nearest_contour_selected_by"] = "nearest"
+                dbg["scene4_nearest_contour_best_dist"] = round(best_dist, 1)
+        if best is None and valid:
+            # Fallback: largest contour (reacquisition after lost / init)
+            best = max(valid, key=lambda c: c["area"])
+            dbg["scene4_nearest_contour_selected_by"] = "largest_fallback" if prev_center else "largest_init"
+
+        dbg["scene4_nearest_contour_valid_count"] = 1 if best else 0
+        dbg["scene4_debug_best_box"] = best["bbox"] if best else None
+        dbg["scene4_debug_pred_bbox"] = ([int(prev_center[0] - fw // 2),
+                                           int(prev_center[1] - fh // 2), fw, fh]
+                                          if prev_center else None)
+        dbg["scene4_debug_roi"] = ([int(prev_center[0] - search_win),
+                                     int(prev_center[1] - search_win),
+                                     search_win * 2, search_win * 2]
+                                    if prev_center else None)
+        dbg["scene4_debug_anchor"] = list(prev_center) if prev_center else None
+
+        # ── Build result ─────────────────────────────────────────────
+        if best:
+            dbg["scene4_nearest_contour_best_area"] = best["area"]
+            detected_center = best["center"]
+            # Smooth (matching video4.py: old*0.7 + new*0.3)
+            if prev_center:
+                new_x = int(prev_center[0] * smooth + detected_center[0] * (1 - smooth))
+                new_y = int(prev_center[1] * smooth + detected_center[1] * (1 - smooth))
+                new_center = (new_x, new_y)
+            else:
+                new_center = detected_center
+
+            bbox_o = [int(new_center[0] - fw // 2), int(new_center[1] - fh // 2), fw, fh]
+
+            self.center = new_center
+            self.bbox = bbox_o
+            self.last_reliable_center = new_center
+            self.last_reliable_bbox = bbox_o
+            self.predicted_anchor_center = new_center
+            self.lost_count = 0
+            self.state = "CONTOUR_TRACK"
+
+            dbg.update({"scene4_state": "CONTOUR_TRACK",
+                        "scene4_center_source": "nearest_motion_contour",
+                        "scene4_reject_reason_top": ""})
+            return self._make_result(frame_id, bbox_o, new_center, float(best["area"]),
+                                     True, False, False, True,
+                                     "CONTOUR_TRACK", "", dbg)
+        else:
+            # Hold: no valid contour → keep last position, no extrapolation
+            hold_center = prev_center or (self.bbox[0] + self.bbox[2] // 2,
+                                          self.bbox[1] + self.bbox[3] // 2) if self.bbox else (0, 0)
+            hold_bbox = self.bbox or [0, 0, fw, fh]
+            self.center = hold_center
+            self.state = "NO_MOTION_HOLD"
+
+            dbg.update({"scene4_state": "NO_MOTION_HOLD",
+                        "scene4_center_source": "nearest_contour_hold",
+                        "scene4_reject_reason_top": "scene4_no_motion_contour"})
+            return self._make_result(frame_id, hold_bbox, hold_center, 0.0,
+                                     False, False, True, False,
+                                     "NO_MOTION_HOLD", "scene4_no_motion_contour", dbg)
+
+    # =========================================================================
+    #  Interactive mode: mouse correction + nearest motion contour
+    # =========================================================================
+
+    def _on_mouse(self, event, x, y, flags, param):
+        """Mouse callback: click-drag to re-select target."""
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self._dragging = True
+            self._drag_start = (x, y)
+            self._drag_end = (x, y)
+        elif event == cv2.EVENT_MOUSEMOVE and self._dragging:
+            self._drag_end = (x, y)
+        elif event == cv2.EVENT_LBUTTONUP:
+            self._dragging = False
+            self._drag_end = (x, y)
+            x1 = min(self._drag_start[0], self._drag_end[0])
+            y1 = min(self._drag_start[1], self._drag_end[1])
+            x2 = max(self._drag_start[0], self._drag_end[0])
+            y2 = max(self._drag_start[1], self._drag_end[1])
+            if x2 > x1 + 4 and y2 > y1 + 4:
+                # Convert display coords back to original coords
+                s = self._interactive_display_w / max(self._bgr_frame.shape[1], 1)
+                ox1 = int(x1 / s)
+                oy1 = int(y1 / s)
+                ox2 = int(x2 / s)
+                oy2 = int(y2 / s)
+                self._manual_bbox = [ox1, oy1, ox2 - ox1, oy2 - oy1]
+                cx = ox1 + (ox2 - ox1) // 2
+                cy = oy1 + (oy2 - oy1) // 2
+                self.center = (cx, cy)
+                self.bbox = self._manual_bbox
+                self.last_reliable_center = (cx, cy)
+                self.last_reliable_bbox = self._manual_bbox
+                self.predicted_anchor_center = (cx, cy)
+                self.fixed_box_w = ox2 - ox1
+                self.fixed_box_h = oy2 - oy1
+                print(f"  [Scene4] Manual re-select: bbox={self._manual_bbox}, center=({cx},{cy})")
+
+    def _draw_overlay(self, bgr_frame, result, frame_id):
+        """Create display image with tracking overlay."""
+        dh = 800
+        dw = int(bgr_frame.shape[1] * dh / bgr_frame.shape[0])
+        self._interactive_display_w = dw
+        display = cv2.resize(bgr_frame, (dw, dh))
+
+        if result.get("detected"):
+            bb = result["bbox"]
+            if bb:
+                x, y, w, h = [int(v) for v in bb]
+                s = dw / bgr_frame.shape[1]
+                dx, dy = int(x * s), int(y * s)
+                dw2, dh2 = int(w * s), int(h * s)
+                cv2.rectangle(display, (dx, dy), (dx + dw2, dy + dh2), (0, 255, 255), 2)
+                cv2.circle(display, (dx + dw2 // 2, dy + dh2 // 2), 5, (0, 0, 255), -1)
+
+        if self._dragging:
+            cv2.rectangle(display, self._drag_start, self._drag_end, (0, 255, 0), 2)
+
+        state = result.get("scene4_state", "?")
+        det = "DETECT" if result.get("detected") else "HOLD"
+        cv2.putText(display, f"F{frame_id} {det} {state}  [SPACE:pause R:reset Q:quit]",
+                    (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        if self._paused:
+            cv2.putText(display, "PAUSED - drag to re-select", (10, 50),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+
+        if not self._mouse_set:
+            cv2.namedWindow("Scene4 Interactive")
+            cv2.setMouseCallback("Scene4 Interactive", self._on_mouse)
+            self._mouse_set = True
+        cv2.imshow("Scene4 Interactive", display)
+
+    def _interactive_display(self, bgr_frame, result, frame_id):
+        """Show frame; if paused, block until user unpauses.
+        Returns False if user quit, True to continue."""
+        self._bgr_frame = bgr_frame
+        self._draw_overlay(bgr_frame, result, frame_id)
+
+        while True:
+            key = cv2.waitKey(30) & 0xFF
+
+            if key == ord(' '):
+                self._paused = not self._paused
+                if not self._paused:
+                    self._cached_result = None
+                    print(f"  [Scene4] Resumed")
+                    return True  # resume processing
+                else:
+                    print(f"  [Scene4] Paused - drag to re-select, SPACE to resume")
+                    self._draw_overlay(bgr_frame, result, frame_id)  # update PAUSED text
+            elif key == ord('r'):
+                self._manual_bbox = None
+                print("  [Scene4] Reset: clear manual bbox")
+            elif key == ord('q'):
+                return False  # quit
+
+            # If not paused, return immediately so video advances
+            if not self._paused:
+                return True
+
+    def track_frame_interactive(self, gray_frame, bgr_frame, frame_id):
+        """Run whatever detection mode is active, then add interactive overlay.
+        Blocks video when paused. Mouse-drag re-selects target."""
+        # Run normal detection (respects scene4_detection_mode)
+        result = self.track_frame(gray_frame, frame_id)
+        self._bgr_frame = bgr_frame
+
+        # Show frame once, then enter pause loop if paused
+        self._draw_overlay(bgr_frame, result, frame_id)
+
+        while True:
+            key = cv2.waitKey(30) & 0xFF
+
+            # ── Check for manual bbox from mouse drag ──────────────
+            if self._manual_bbox is not None:
+                bb = self._manual_bbox
+                cx = bb[0] + bb[2] // 2
+                cy = bb[1] + bb[3] // 2
+                self.center = (cx, cy)
+                self.bbox = bb
+                self.last_reliable_center = (cx, cy)
+                self.last_reliable_bbox = bb
+                self.predicted_anchor_center = (cx, cy)
+                self.fixed_box_w = bb[2]
+                self.fixed_box_h = bb[3]
+                result["bbox"] = bb
+                result["center"] = (cx, cy)
+                result["detected"] = True
+                result["predicted"] = False
+                result["lost"] = False
+                result["used_for_trajectory"] = True
+                result["scene4_center_source"] = "manual_re_select"
+                result["scene4_state"] = "COMPONENT_TRACK"
+                result["reject_reason"] = "scene4_manual_re_select"
+                self._manual_bbox = None
+                self._draw_overlay(bgr_frame, result, frame_id)
+                print(f"  [Scene4] Re-selected: bbox={bb}, center=({cx},{cy})")
+
+            if key == ord(' '):
+                self._paused = not self._paused
+                if self._paused:
+                    print(f"  [Scene4] Paused at F{frame_id} - drag to re-select, SPACE to resume")
+                    self._draw_overlay(bgr_frame, result, frame_id)
+                else:
+                    print(f"  [Scene4] Resumed")
+                    return result
+
+            elif key == ord('r') and self._paused:
+                self._manual_bbox = None
+                print("  [Scene4] Reset: clear manual bbox")
+
+            elif key == ord('q'):
+                result["_user_quit"] = True
+                return result
+
+            if not self._paused:
+                return result
+
+    # =========================================================================
     #  ROI largest-component detection (simple mode)
     # =========================================================================
 
@@ -948,6 +1272,15 @@ class Scene4FrameDiffTracker:
 
         # ── Detection mode dispatch ──────────────────────────────────
         detection_mode = self.cfg.get("scene4_detection_mode", "tracklet")
+
+        if detection_mode == "nearest_motion_contour":
+            # No Kalman, no phase, no predicted_anchor drift
+            result = self._detect_nearest_motion_contour(gray_frame, frame_id)
+            self._prev_gray = sf.copy()
+            self._frame_count += 1
+            self._frames_since_init = (frame_id - self.init_frame_id
+                                       if self.init_frame_id >= 0 else 999)
+            return result
 
         if detection_mode == "roi_largest_component":
             # Simple mode: largest component in ROI around anchor
