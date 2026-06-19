@@ -47,9 +47,14 @@ def _safe_dist(a, b):
 
 
 def _safe_num(v, default=-1.0):
-    """Return v or default if v is None/invalid."""
+    """Return v or default if v is None or NaN."""
     if v is None:
         return default
+    try:
+        if v != v:  # NaN is not equal to itself
+            return default
+    except Exception:
+        pass
     return v
 
 
@@ -1064,7 +1069,7 @@ class Scene4FrameDiffTracker:
             "scene4_best_tracklet_age",
         ]
         _text_fields = [
-            "scene4_tracklet_accept", "scene4_tracklet_accept_reason",
+            "scene4_tracklet_accept_reason",
             "scene4_tracklet_reject_flags",
         ]
         _center_jump_coords = [
@@ -1079,6 +1084,8 @@ class Scene4FrameDiffTracker:
             dbg[k] = 0 if k != "scene4_best_tracklet_id" else -1
         for k in _text_fields:
             dbg[k] = ""
+        # scene4_tracklet_accept is 0/1 integer, default 0
+        dbg["scene4_tracklet_accept"] = 0
         # center_jump is a distance, default -1
         dbg["scene4_center_jump"] = -1.0
 

@@ -165,6 +165,17 @@ def _safe_center(c):
         return (int(c[0]), int(c[1]))
     return None
 
+# Fields that must always be integer 0/1 in the debug CSV
+_BOOL_INT_FIELDS = {
+    "scene4_tracklet_accept",
+    "detected",
+    "predicted",
+    "lost",
+    "used_for_trajectory",
+    "initialized",
+}
+
+
 def _debug_row(result, frame_id):
     """Extract debug fields from a tracker result dict, filling missing with ''."""
     if result is None:
@@ -174,6 +185,19 @@ def _debug_row(result, frame_id):
         val = result.get(f, "")
         if val is None:
             val = ""
+        # Normalise boolean-ish fields to 0/1
+        if f in _BOOL_INT_FIELDS and val != "":
+            if isinstance(val, bool):
+                val = 1 if val else 0
+            elif isinstance(val, str) and val.lower() in ("true", "yes", "1"):
+                val = 1
+            elif isinstance(val, str) and val.lower() in ("false", "no", "0"):
+                val = 0
+            else:
+                try:
+                    val = int(val)
+                except (ValueError, TypeError):
+                    val = 0
         row[f] = val
     row["frame_id"] = frame_id
 
