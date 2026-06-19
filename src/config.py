@@ -350,13 +350,12 @@ SCENES = {
     "scene4_drone": {
         "name": "地面光学站跟踪无人机",                     # 场景显示名称
         "video": "document/地面光学站跟踪无人机.avi",        # 视频文件路径（AVI 格式, 大文件）
-        "templates": [                                    # 模板列表（单模板验证初始化）
+        "templates": [                                    # 模板列表
             "document/scene4_drone_template_1.png",
             "document/scene4_drone_template_2.png",
             "document/scene4_drone_template_3.png",
             "document/scene4_drone_template_4.png",
             "document/scene4_drone_template_5.png",
-
             "document/scene4_drone_template_6.png",
             "document/scene4_drone_template_7.png",
             "document/scene4_drone_template_8.png",
@@ -364,7 +363,6 @@ SCENES = {
             "document/scene4_drone_template_10.png",
             "document/scene4_drone_template_11.png",
             "document/scene4_drone_template_12.png",
-
             "document/scene4_drone_template_13.png",
             "document/scene4_drone_template_14.png",
             "document/scene4_drone_template_15.png",
@@ -379,25 +377,25 @@ SCENES = {
         "multi_scale": [0.9, 1.0, 1.1],  # 多尺度
         "start_frame": 0,             # 起始帧号
         "use_integral_ncc": True,     # 积分图加速 NCC
-        "max_motion_distance": 300,     # 0=回退到自动公式
+        "max_motion_distance": 300,   # 允许离预测点的最大距离(px)
         "ncc_step": 3,                # 滑窗步长
         "resize_scale": 0.5,          # 帧缩放（2448×2048→1224×1024, 像素量降至 1/4）
-        "tracking_stop_frame": 230,    # 超过此帧号后隐藏轨迹(避免树林误框), None=不隐藏
+        "tracking_stop_frame": 230,   # 超过此帧号后隐藏轨迹(避免树林误框), None=不隐藏
         # --- 可视化 ---
         "show_predicted_bbox": False,
         "draw_predicted_trajectory": False,
         # --- 初始化连续确认 ---
-        "enable_init_confirmation": False,     # 关闭(单模板验证阶段)
+        "enable_init_confirmation": False,
         "init_confirm_frames": 3,
         "init_confirm_min_score": 0.50,
         "init_confirm_max_distance": 60,
         # --- 运动方向约束 ---
-        "enable_motion_direction":False,
+        "enable_motion_direction": False,
         "motion_direction_y": -1,
         "motion_direction_tolerance": 6,
         # --- 跳变检测 ---
-        "enable_jump_detection": False,         # 启用
-        "jump_max_distance": 90,              # 放宽到 160(无人机帧间大位移)
+        "enable_jump_detection": False,
+        "jump_max_distance": 90,
         "jump_max_area_change": 2.0,
         # --- y 前进速度限制 ---
         "enable_y_forward_speed_limit": False,
@@ -417,66 +415,85 @@ SCENES = {
         "prediction_max_height_change_ratio": 1.3,
         "prediction_out_of_bounds_policy": "reject",
         "prediction_reject_adds_lost": True,
-        # --- 可见性判断 ---
-        "scene4_use_visibility_gate": True,           # 启用可见性判断（不只看固定帧号）
-        "scene4_min_score_for_visible": 0.32,         # 可见最低NCC分数
-        "scene4_low_score_patience": 5,               # 连续低分容忍帧数
-        "scene4_min_local_contrast": 8.0,             # 目标区域最低局部对比度
-        "scene4_stop_when_occluded": True,            # 遮挡时停止画框保留轨迹
-        # 帧差追踪器
-        "use_scene4_frame_diff_tracker": True,           # 混合跟踪器
-        "scene4_init_mode": "template_roi",               # manual_bbox / template_roi
-        "scene4_use_manual_init_bbox": True,              # 手动初始框初始化
-        "scene4_manual_init_frame": 0,                    # 手动初始化帧号
-        "scene4_manual_init_bbox": [1581, 1071, 161, 59], # [原x,原y,原w,原h]
-        "scene4_use_template_init": True,                 # 模板ROI初始化(备选)
-        "scene4_init_search_roi": [1450, 980, 500, 260],  # 初始化搜索ROI
-        "scene4_template_init_threshold": 0.34,           # 模板初始化阈值
-        "scene4_use_frame_diff_init": False,              # 禁用全图帧差自动初始化
-        "scene4_diff_after_initialized_only": True,       # 初始化后才用帧差
-        "scene4_local_search_radius": 180,                # 局部帧差搜索半径
+
+        # ═════════════════════════════════════════════════════════════════
+        #  Scene4 帧差追踪器 — motion tracklet 系统
+        # ═════════════════════════════════════════════════════════════════
+        "use_scene4_frame_diff_tracker": True,
+        # --- 初始化 ---
+        "scene4_init_mode": "template_roi",
+        "scene4_use_manual_init_bbox": True,
+        "scene4_manual_init_frame": 0,
+        "scene4_manual_init_bbox": [1581, 1071, 161, 59],  # [原x,原y,原w,原h]
+        "scene4_use_template_init": True,
+        "scene4_init_search_roi": [1450, 980, 500, 260],
+        "scene4_template_init_threshold": 0.34,
+        "scene4_use_frame_diff_init": False,
+        "scene4_diff_after_initialized_only": True,
+        "scene4_local_search_radius": 180,
+        # --- 状态机 ---
+        "scene4_init_locked_frames": 30,              # INIT_LOCKED 持续帧数
+        "scene4_init_lock_radius": 80,                # INIT_LOCKED 期允许的最大中心偏移(px)
+        "scene4_max_kalman_predict": 20,              # 最大连续 Kalman 预测帧数→LOST
+        "scene4_max_reacquire_frames": 15,            # 最大连续 REACQUIRE 帧数→KALMAN_PREDICT
+        # --- 帧差提取 ---
         "scene4_diff_method": "two_frame",
         "scene4_diff_threshold": 3,
         "scene4_diff_use_adaptive": False,
         "scene4_gaussian_blur": 0,
         "scene4_morph_open": 0,
         "scene4_morph_dilate": 1,
-        "scene4_min_area": 8,                             # 最小面积(过滤树叶)
+        # --- 面积过滤 ---
+        "scene4_min_area": 8,
         "scene4_max_area": 800,
         "scene4_min_w": 4, "scene4_max_w": 120,
         "scene4_min_h": 4, "scene4_max_h": 120,
-        "scene4_expected_area": 60,                        # 期望面积
-        "scene4_area_tolerance": 80,                       # 面积容差
+        "scene4_expected_area": 60,
+        "scene4_area_tolerance": 80,
+        "scene4_energy_norm": 500.0,
         "scene4_bbox_padding": 4,
-        "scene4_use_exclude_rois": True,                   # 排除右下角树叶
+        # --- 排除区域 ---
+        "scene4_use_exclude_rois": True,
         "scene4_exclude_rois": [[1700, 1350, 748, 698]],
-        "scene4_use_template_verify": True,                # 模板NCC辅助
-        "scene4_template_min_score": 0.20,
+        # --- 模板验证 ---
+        "scene4_use_template_verify": True,
         "scene4_template_verify_weight": 0.20,
-        "scene4_prediction_gate": 80,
-        "scene4_max_jump": 70,
-        "scene4_max_lost": 20,
-        "scene4_min_candidate_score": 0.35,
-        # 稳定期
-        "scene4_stabilize_frames": 30,                     # 稳定期帧数
-        "scene4_stabilize_prediction_gate": 45,            # 稳定期预测门控
-        "scene4_stabilize_max_jump": 35,                   # 稳定期跳变限制
-        "scene4_stabilize_hover_radius": 45,               # 稳定期hover半径
-        # 固定bbox
-        "scene4_use_fixed_bbox_size": True,                # 固定bbox尺寸
-        "scene4_bbox_size_update_alpha": 0.05,            # bbox更新alpha
-        # 模板冻结
-        "scene4_freeze_template_frames": 60,               # 模板冻结帧数
-        "scene4_template_update_threshold": 0.65,          # 模板更新阈值
-        "scene4_template_min_score": 0.30,                 # 模板最低分
-        # hover
+        # --- Motion tracklet 管理 ---
+        "scene4_use_motion_tracklets": True,
+        "scene4_tracklet_window": 8,                  # tracklet 特征计算窗口
+        "scene4_tracklet_assoc_dist": 45,             # 候选-轨迹片段关联最大距离(px)
+        "scene4_tracklet_max_missed": 3,              # 连续未匹配帧数→删除
+        "scene4_tracklet_min_age": 3,                 # 最小年龄→可被评分
+        # --- Tracklet 接管条件 ---
+        "scene4_reacquire_radius": 220,               # 重接管允许的最大锚点距离(px)
+        "scene4_tracklet_min_direction_score": 0.55,  # 方向一致性最低分（降低以包容无人机弱信号）
+        "scene4_tracklet_min_area_score": 0.35,       # 面积量级最低分（降低）
+        "scene4_tracklet_min_energy_score": 0.15,     # 运动能量最低分（无人机帧差信号弱）
+        "scene4_tracklet_min_template_score": 0.20,   # 模板NCC最低分
+        "scene4_tracklet_min_total_score": 0.45,      # 总分最低（降低）
+        "scene4_tracklet_min_net_displacement": 5,    # 最小净位移(px)（无人机可能缓慢移动）
+        # --- 固定 bbox ---
+        "scene4_use_fixed_bbox_size": True,
+        "scene4_bbox_size_update_alpha": 0.05,
+        # --- 模板冻结 ---
+        "scene4_freeze_template_frames": 120,         # 前N帧不更新模板
+        "scene4_template_update_threshold": 0.70,     # 更新模板所需最低 NCC 分
+        # --- Hover 模板保持 ---
         "scene4_use_hover_template_hold": True,
-        "scene4_hover_template_threshold": 0.45,           # hover阈值
-        "scene4_hover_search_radius": 45,                  # hover搜索半径
-        "scene4_hover_max_shift": 35,                      # hover最大位移
+        "scene4_hover_template_threshold": 0.45,
+        "scene4_hover_search_radius": 45,
+        "scene4_hover_max_shift": 35,
         "scene4_hover_max_frames": 60,
-        "scene4_draw_predicted": True,                    # 显示预测框
-        "scene4_hide_after_lost": False,                  # 丢失后不隐藏
+        # --- 其他 ---
+        "scene4_max_lost": 20,
+        "scene4_draw_predicted": True,
+        "scene4_hide_after_lost": False,
+        # --- 可见性判断 (保留兼容) ---
+        "scene4_use_visibility_gate": True,
+        "scene4_min_score_for_visible": 0.32,
+        "scene4_low_score_patience": 5,
+        "scene4_min_local_contrast": 8.0,
+        "scene4_stop_when_occluded": True,
     },
 }
 
